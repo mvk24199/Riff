@@ -54,13 +54,26 @@ struct NowPlayingView: View {
             VStack(spacing: 0) {
                 topBar
 
-                HStack(spacing: 0) {
+                // ZStack-anchored layout instead of HStack distribution.
+                // HStack let the side pane get squeezed off-screen when
+                // SwiftUI couldn't reconcile leftPlayer's flexible
+                // maxWidth with macOS fullscreen window sizing. ZStack
+                // with .topTrailing pins the pane absolutely on the right;
+                // the player is laid out independently with trailing
+                // padding equal to the pane width + visual gap so its
+                // content centers in the remaining space.
+                ZStack(alignment: .topTrailing) {
                     leftPlayer
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.trailing, 380 + 16 + 24)  // pane width + gap + outer pad
+                        .padding(.leading, 24)
+                        .padding(.bottom, 24)
                     sidePane
                         .frame(width: 380)
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 24)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .preferredColorScheme(.dark)
@@ -208,7 +221,6 @@ struct NowPlayingView: View {
                 .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.5), radius: 16, x: -4, y: 0)
-        .padding(.leading, 16)  // visual gap from the player on the left
     }
 
     // MARK: - Scrubber
