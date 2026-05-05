@@ -54,18 +54,14 @@ struct NowPlayingView: View {
             VStack(spacing: 0) {
                 topBar
 
-                HStack(alignment: .top, spacing: 32) {
+                HStack(spacing: 0) {
                     leftPlayer
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     sidePane
-                        .frame(width: 360, alignment: .leading)
-                        .layoutPriority(1)  // pane stays at full width even when window stretches
+                        .frame(width: 380)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding(.horizontal, 32)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 24)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -126,7 +122,7 @@ struct NowPlayingView: View {
                 default: Color.white.opacity(0.06)
                 }
             }
-            .frame(maxWidth: 360, maxHeight: 360)
+            .frame(width: 320, height: 320)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
 
@@ -143,12 +139,13 @@ struct NowPlayingView: View {
             }
 
             scrubber
+                .frame(maxWidth: 480)
             playbackControls
                 .padding(.top, 4)
 
             Spacer()
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Right side: tabbed pane
@@ -192,16 +189,16 @@ struct NowPlayingView: View {
             }
         }
         .padding(16)
-        .frame(maxHeight: .infinity)
-        // Solid (fully opaque) panel so the hero backdrop never shows
-        // through the pane. Two stacked layers: a near-black base, then
-        // a faint white tint to lift it off pure black.
-        .background(Color(white: 0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Solid panel — was getting lost against the dark backdrop, so
+        // bumping the surface lighter and adding a clear stroked border.
+        .background(Color(white: 0.16))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
         )
+        .padding(.leading, 16)  // visual gap from the player on the left
     }
 
     // MARK: - Scrubber
