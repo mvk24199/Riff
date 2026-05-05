@@ -57,12 +57,42 @@
     // Watch navigator.mediaSession.metadata + the URL videoId together — that
     // pair changes whenever the page advances to a new track. Polling is the
     // most reliable signal; YT Music doesn't fire a public event we can hook.
+    // Track the last-seen playlistId across pollTrack ticks. YT Music's SPA
+    // strips the `list` URL param once a track is playing, but the user
+    // is still inside the playlist context — so we cache the last
+    // non-null value and keep reporting it on subsequent ticks until the
+    // user navigates somewhere that explicitly clears it.
+    let stickyPlaylistId = null;
     let lastTrackKey = "";
+    function findPlaylistId() {
+        const url = new URL(location.href);
+        // 1. Direct URL param (truthful right after navigation).
+        let id = url.searchParams.get("list");
+        if (id) return id;
+        // 2. Sometimes YT Music keeps it in the hash route.
+        if (location.hash) {
+            const hashUrl = new URL(location.hash.slice(1), location.origin);
+            id = hashUrl.searchParams.get("list");
+            if (id) return id;
+        }
+        // 3. Look for a queue link in the DOM that includes ?list=.
+        const link = document.querySelector('a[href*="list="]');
+        if (link) {
+            try {
+                const href = new URL(link.href, location.origin);
+                id = href.searchParams.get("list");
+                if (id) return id;
+            } catch (_) { /* ignore malformed */ }
+        }
+        return null;
+    }
     function pollTrack() {
         const md = navigator.mediaSession && navigator.mediaSession.metadata;
         const url = new URL(location.href);
         const videoId = url.searchParams.get("v");
-        const playlistId = url.searchParams.get("list");
+        const found = findPlaylistId();
+        if (found) stickyPlaylistId = found;
+        const playlistId = stickyPlaylistId;
         if (!md || !videoId) return;
         const key = videoId + "|" + (md.title || "") + "|" + (playlistId || "");
         if (key === lastTrackKey) return;

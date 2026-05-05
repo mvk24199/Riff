@@ -157,28 +157,47 @@ final class PlayerBridge {
         }
     }
 
-    /// Plays a known YT Music playlist (regular playlists where `id` is the
-    /// playlistId itself). For album/podcast/artist tiles, see the resolver
-    /// variants below.
+    /// Plays a YT Music playlist. Tries direct /watch?list= first (works
+    /// for proper PL... / OLAK5uy_... ids); on failure falls back to the
+    /// browseId resolver path which will fetch the playlist's first track
+    /// and navigate /watch?v=&list= explicitly.
     func playPlaylist(id: String) async {
-        await navigate(watchURL(videoId: nil, playlistId: id))
+        // Strip a "VL" prefix if it's still attached — VL ids are browse
+        // ids (used to fetch playlist details), not playable ids.
+        let cleaned = id.hasPrefix("VL") ? String(id.dropFirst(2)) : id
+        Log.resolver.debug("playPlaylist id=\(id, privacy: .public) cleaned=\(cleaned, privacy: .public)")
+        await navigate(watchURL(videoId: nil, playlistId: cleaned))
     }
 
     func playAlbum(id: String)    async { await playByResolvingBrowseId(id) }
     func playPodcast(id: String)  async { await playByResolvingBrowseId(id) }
     func playArtistRadio(id: String) async { await playByResolvingBrowseId(id) }
 
-    /// Resolves a browseId via InnerTube (first watchEndpoint in the
-    /// response), then navigates to /watch?v=&list= so the page builds the
-    /// queue. Silently no-ops if the browse has no playable item.
+    /// Resolves a browseId via InnerTube to a playable (videoId, playlistId)
+    /// tuple, then navigates /watch?v=&list=. Has multiple fallback paths
+    /// so unresponsive entities are rare:
+    ///   1. innerTube.playable(forBrowseId:) — primary path (microformat)
+    ///   2. If browseId starts with "VL", strip and try as direct playlist
+    ///   3. Last resort: navigate /browse/<id> so the user lands on the
+    ///      detail page even if we can't auto-play.
     private func playByResolvingBrowseId(_ browseId: String) async {
-        guard let tuple = (try? await innerTube.playable(forBrowseId: browseId)) ?? nil else {
-            Log.resolver.debug("\(browseId, privacy: .public) → no playable endpoint found")
+        if let tuple = (try? await innerTube.playable(forBrowseId: browseId)) ?? nil {
+            let url = watchURL(videoId: tuple.videoId, playlistId: tuple.playlistId)
+            Log.resolver.debug("\(browseId, privacy: .public) → v=\(tuple.videoId ?? "nil", privacy: .public) list=\(tuple.playlistId ?? "nil", privacy: .public) → \(url, privacy: .public)")
+            await navigate(url)
             return
         }
-        let url = watchURL(videoId: tuple.videoId, playlistId: tuple.playlistId)
-        Log.resolver.debug("\(browseId, privacy: .public) → v=\(tuple.videoId ?? "nil", privacy: .public) list=\(tuple.playlistId ?? "nil", privacy: .public) → \(url, privacy: .public)")
-        await navigate(url)
+        // Fallback 1: VL-prefix strip → direct playlist play.
+        if browseId.hasPrefix("VL") {
+            let plid = String(browseId.dropFirst(2))
+            Log.resolver.debug("\(browseId, privacy: .public) → resolver failed; falling back to direct playlist plid=\(plid, privacy: .public)")
+            await navigate(watchURL(videoId: nil, playlistId: plid))
+            return
+        }
+        // Fallback 2: at least put the user on the entity's page so they
+        // can manually press Play if our resolver missed.
+        Log.resolver.debug("\(browseId, privacy: .public) → no playable endpoint and no fallback; navigating to browse page")
+        await navigate("https://music.youtube.com/browse/\(browseId)")
     }
 
     private func watchURL(videoId: String?, playlistId: String?) -> String {
