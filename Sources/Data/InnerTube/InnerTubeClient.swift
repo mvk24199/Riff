@@ -378,20 +378,61 @@ final class InnerTubeClient: Sendable {
         return NextResponse(queue: queue, lyricsBrowseId: lyricsId, relatedBrowseId: relatedId, likeStatus: likeStatus)
     }
 
-    /// Fetch the lyrics text for a given lyrics browseId (extracted from
-    /// `/next`). Returns nil when the song has no lyrics or YT couldn't
-    /// match them.
-    func lyrics(browseId: String) async throws -> String? {
+    struct LyricLine: Sendable, Identifiable, Hashable {
+        let id: Int
+        let text: String
+        /// Start time of the line in milliseconds, or nil when timing
+        /// data isn't available.
+        let startMs: Int?
+    }
+
+    struct LyricsResult: Sendable {
+        let lines: [LyricLine]
+        /// True when YT returned a synced (time-tagged) lyric stream.
+        let timed: Bool
+    }
+
+    /// Fetch lyrics for a track (browseId comes from `/next`'s lyrics tab).
+    /// Returns the structured form when synced lyrics are available — each
+    /// line carries a `startMs` so the UI can highlight + auto-scroll —
+    /// otherwise plain text split by line breaks.
+    func lyrics(browseId: String) async throws -> LyricsResult? {
         let body = try await postRaw(.browse, body: ["browseId": browseId])
-        // contents.sectionListRenderer.contents[0].musicDescriptionShelfRenderer.description.runs[].text
-        let shelf = Parsing.dig(body, ["contents", "sectionListRenderer", "contents", "0", "musicDescriptionShelfRenderer"]) as? [String: Any]
-        if let text = Parsing.runs(shelf, "description", separator: "") { return text }
-        // Some lyrics are returned with newline-separated runs; join with \n
-        if let runs = Parsing.dig(shelf, ["description", "runs"]) as? [[String: Any]] {
-            let joined = runs.compactMap { $0["text"] as? String }.joined()
-            return joined.isEmpty ? nil : joined
+
+        // 1. Synced (timed) lyrics — newer response shape.
+        // contents.elementRenderer.newElement.type.componentType.model
+        //   .timedLyricsModel.lyricsData.timedLyricsData[]
+        if let timed = Parsing.dig(body, ["contents", "elementRenderer", "newElement", "type",
+                                          "componentType", "model", "timedLyricsModel",
+                                          "lyricsData", "timedLyricsData"]) as? [[String: Any]] {
+            let lines: [LyricLine] = timed.enumerated().compactMap { idx, item in
+                let text = (item["lyricLine"] as? String) ?? ""
+                let startMs = ((item["cueRange"] as? [String: Any])?["startTimeMilliseconds"] as? String).flatMap(Int.init)
+                guard !text.isEmpty else { return nil }
+                return LyricLine(id: idx, text: text, startMs: startMs)
+            }
+            if !lines.isEmpty {
+                return LyricsResult(lines: lines, timed: lines.contains { $0.startMs != nil })
+            }
         }
-        return nil
+
+        // 2. Plain-text lyrics — older shape.
+        let shelf = Parsing.dig(body, ["contents", "sectionListRenderer", "contents", "0",
+                                       "musicDescriptionShelfRenderer"]) as? [String: Any]
+        let plain: String?
+        if let text = Parsing.runs(shelf, "description", separator: "") {
+            plain = text
+        } else if let runs = Parsing.dig(shelf, ["description", "runs"]) as? [[String: Any]] {
+            let joined = runs.compactMap { $0["text"] as? String }.joined()
+            plain = joined.isEmpty ? nil : joined
+        } else {
+            plain = nil
+        }
+        guard let plain else { return nil }
+        let lines = plain.split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+            .map { LyricLine(id: $0.offset, text: String($0.element), startMs: nil) }
+        return LyricsResult(lines: lines, timed: false)
     }
 
     /// Fetch related songs for a given related browseId.

@@ -387,16 +387,41 @@ struct NowPlayingView: View {
                 }
             }
 
-            if env.player.upNext.isEmpty {
+            // Compose the queue: previously played (faded), current
+            // (highlighted), upcoming. Played history is rendered with a
+            // "Recently played" caption so the user can tell where they
+            // are in the timeline.
+            let history = env.player.playedHistory
+            let upcoming = env.player.upNext
+            if history.isEmpty && upcoming.isEmpty {
                 emptyHint("Queue empty.")
             } else {
-                queueList(env.player.upNext)
+                if !history.isEmpty {
+                    Text("Recently played")
+                        .font(.system(size: 10, weight: .semibold))
+                        .textCase(.uppercase)
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .padding(.horizontal, 4)
+                    queueList(history, faded: true)
+                    Divider().background(Color.white.opacity(0.08))
+                        .padding(.vertical, 4)
+                }
+                if !upcoming.isEmpty {
+                    Text("Up next")
+                        .font(.system(size: 10, weight: .semibold))
+                        .textCase(.uppercase)
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .padding(.horizontal, 4)
+                    queueList(upcoming, faded: false)
+                }
             }
         }
     }
 
     private var lyricsContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Group {
             if env.player.lyricsLoading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -406,6 +431,8 @@ struct NowPlayingView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 16)
+            } else if env.player.lyricsTimed && !env.player.lyricsLines.isEmpty {
+                syncedLyrics
             } else if let text = env.player.lyrics, !text.isEmpty {
                 Text(text)
                     .font(.system(size: 13))
@@ -419,6 +446,49 @@ struct NowPlayingView: View {
         }
     }
 
+    /// Synced lyrics view — highlights the line whose time-range covers
+    /// `env.player.elapsed` and auto-scrolls it into view as playback
+    /// advances.
+    private var syncedLyrics: some View {
+        let lines = env.player.lyricsLines
+        let activeIndex = activeLyricIndex(for: env.player.elapsed * 1000, in: lines)
+        return ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
+                    Text(line.text.isEmpty ? "♪" : line.text)
+                        .font(.system(size: idx == activeIndex ? 14 : 13,
+                                      weight: idx == activeIndex ? .semibold : .regular))
+                        .foregroundStyle(
+                            idx == activeIndex ? Color.white :
+                            abs(idx - activeIndex) <= 1 ? Color.white.opacity(0.7) :
+                            Color.white.opacity(0.4)
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(line.id)
+                }
+            }
+            .onChange(of: activeIndex) { _, newIndex in
+                guard newIndex >= 0, newIndex < lines.count else { return }
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo(lines[newIndex].id, anchor: .center)
+                }
+            }
+        }
+    }
+
+    /// Find the index of the line whose start time precedes `elapsedMs`
+    /// and whose successor's start time exceeds it. Returns -1 when no
+    /// line has started yet.
+    private func activeLyricIndex(for elapsedMs: Double, in lines: [InnerTubeClient.LyricLine]) -> Int {
+        guard !lines.isEmpty else { return -1 }
+        var active = -1
+        for (idx, line) in lines.enumerated() {
+            guard let startMs = line.startMs else { continue }
+            if Double(startMs) <= elapsedMs { active = idx } else { break }
+        }
+        return active
+    }
+
     private var relatedContent: some View {
         Group {
             if env.player.related.isEmpty {
@@ -429,7 +499,7 @@ struct NowPlayingView: View {
         }
     }
 
-    private func queueList(_ items: [MediaItem]) -> some View {
+    private func queueList(_ items: [MediaItem], faded: Bool = false) -> some View {
         let currentId = env.player.currentTrack?.videoId
         return LazyVStack(alignment: .leading, spacing: 4) {
             ForEach(items) { item in
@@ -438,6 +508,7 @@ struct NowPlayingView: View {
                     Task { await env.player.play(item: item) }
                 } label: {
                     queueRow(item: item, isCurrent: isCurrent)
+                        .opacity(faded ? 0.6 : 1.0)
                 }
                 .buttonStyle(.plain)
                 .contextMenu {

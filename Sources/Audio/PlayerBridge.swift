@@ -13,8 +13,13 @@ final class PlayerBridge {
     var progress: Double { duration > 0 ? elapsed / duration : 0 }
     private(set) var currentTrack: Track? = nil
     private(set) var upNext: [MediaItem] = []
+    /// Tracks that have played earlier in this session (most-recent last).
+    /// Capped at `historyCap` so it doesn't grow unbounded.
+    private(set) var playedHistory: [MediaItem] = []
     private(set) var related: [MediaItem] = []
     private(set) var lyrics: String? = nil
+    private(set) var lyricsLines: [InnerTubeClient.LyricLine] = []
+    private(set) var lyricsTimed: Bool = false
     private(set) var lyricsLoading: Bool = false
     private(set) var liked: Bool = false
     /// Whether the full-screen Now Playing view is presented.
@@ -101,9 +106,34 @@ final class PlayerBridge {
         related = []
         lyrics = nil
         currentPlaylistId = nil
+        userClickedAt = Date()
         refreshNextQueueAndIds(forVideoId: item.id, playlistId: nil)
         onUpdate?()
         await play(videoId: item.id)
+    }
+
+    /// Last time `play(item:)` ran. Used to gate when we accept JS-side
+    /// metadata updates for the *same* videoId — within `userClickGraceSeconds`
+    /// we ignore them (catches pre-roll ads), after that window we trust
+    /// them (catches autoplay advances where the URL videoId stays put).
+    @ObservationIgnored private var userClickedAt: Date = .distantPast
+    private static let userClickGraceSeconds: TimeInterval = 30
+    private static let historyCap = 50
+
+    private func archiveCurrent() {
+        guard let old = currentTrack else { return }
+        let item = MediaItem(
+            id: old.videoId, kind: .song,
+            title: old.title, subtitle: old.subtitle,
+            thumbnailURL: old.thumbnailURL
+        )
+        // Skip if it's the same track as the most-recent history entry
+        // (prevents accidental dupes when state resets).
+        if playedHistory.last?.id == item.id { return }
+        playedHistory.append(item)
+        if playedHistory.count > Self.historyCap {
+            playedHistory.removeFirst(playedHistory.count - Self.historyCap)
+        }
     }
 
     /// Pull /next for the given videoId — populates `upNext` and stashes
@@ -120,6 +150,8 @@ final class PlayerBridge {
                 self?.liked = response.likeStatus == .like
                 // Invalidate previously cached tab content for the old track.
                 self?.lyrics = nil
+                self?.lyricsLines = []
+                self?.lyricsTimed = false
                 self?.related = []
             }
         }
@@ -144,14 +176,23 @@ final class PlayerBridge {
     }
 
     /// Lazy-load lyrics on tab open. Sets `lyricsLoading` while in flight.
+    /// Populates either `lyricsLines` (with `lyricsTimed=true`) for synced
+    /// lyrics or just the plain `lyrics` text fallback.
     func loadLyricsIfNeeded() {
-        guard lyrics == nil, !lyricsLoading, let id = lyricsBrowseId else { return }
+        guard lyrics == nil, lyricsLines.isEmpty, !lyricsLoading, let id = lyricsBrowseId else { return }
         lyricsLoading = true
         Task { [innerTube, weak self] in
-            let text = (try? await innerTube.lyrics(browseId: id)) ?? nil
+            let result = (try? await innerTube.lyrics(browseId: id)) ?? nil
             await MainActor.run {
-                self?.lyrics = text ?? "Lyrics not available."
-                self?.lyricsLoading = false
+                guard let self else { return }
+                if let result {
+                    self.lyricsLines = result.lines
+                    self.lyricsTimed = result.timed
+                    self.lyrics = result.lines.map(\.text).joined(separator: "\n")
+                } else {
+                    self.lyrics = "Lyrics not available."
+                }
+                self.lyricsLoading = false
             }
         }
     }
@@ -332,30 +373,19 @@ final class PlayerBridge {
             elapsed = t
             duration = d
         case .trackChanged(let id, let playlistId, let title, let artist, let art):
-            // Two scenarios collide on the same `videoId`:
-            //
-            //  1. **Pre-roll ads.** YT Music plays 2-3 ad inserts before the
-            //     track starts. URL videoId stays at the song the user
-            //     clicked; mediaSession.metadata changes to the ad. Artwork
-            //     comes from i.ytimg.com (YouTube video thumbnails).
-            //  2. **Autoplay advance.** YT Music can advance to the next
-            //     track while keeping the URL videoId stable in playlist
-            //     mode. Artwork comes from lh3.googleusercontent.com (YT
-            //     Music's CDN for real song art).
-            //
-            // Discriminator: the artwork host. Real YT Music tracks always
-            // use lh3.googleusercontent.com; ad inserts always use
-            // i.ytimg.com. Update metadata when the new artwork looks
-            // genuinely musical, regardless of whether videoId matches —
-            // that catches autoplay. Skip when the artwork looks ad-shaped
-            // and the videoId matches — that catches ads.
-            let newArtworkLooksMusical = (art?.host ?? "").contains("lh3.googleusercontent.com")
+            // Time-gated dedupe. Within 30s of a play(item:), we trust the
+            // user-clicked metadata over JS-side reports for the same
+            // videoId — catches pre-roll ads (which all happen in the
+            // first ~10s). After the grace window, we trust JS reports —
+            // catches autoplay advances where YT Music's SPA may keep the
+            // URL videoId stable but advance mediaSession.metadata.
             let sameVideoId = currentTrack?.videoId == id
             let titleChanged = currentTrack?.title != title
+            let withinClickGrace = Date().timeIntervalSince(userClickedAt) < Self.userClickGraceSeconds
 
-            if sameVideoId && !newArtworkLooksMusical && titleChanged {
-                // Pre-roll ad — keep the user's clicked metadata, refresh
-                // duration if we just learned it.
+            if sameVideoId && !titleChanged {
+                // Identical event (re-poll). Just refresh duration if it's
+                // newly available.
                 if duration > 0, let existing = currentTrack, existing.duration == 0 {
                     currentTrack = Track(
                         videoId: existing.videoId,
@@ -365,8 +395,9 @@ final class PlayerBridge {
                         duration: duration
                     )
                 }
-            } else if sameVideoId && !titleChanged {
-                // Identical event (re-poll) — only update duration if needed.
+            } else if sameVideoId && withinClickGrace {
+                // Pre-roll ad / startup churn. Keep the user's clicked
+                // metadata; just absorb duration if we got it.
                 if duration > 0, let existing = currentTrack, existing.duration == 0 {
                     currentTrack = Track(
                         videoId: existing.videoId,
@@ -377,10 +408,13 @@ final class PlayerBridge {
                     )
                 }
             } else {
-                // New track (different videoId) OR autoplay advance with
-                // musical artwork — adopt the JS-reported metadata.
+                // New track — different videoId, OR same videoId but
+                // outside the click-grace window (autoplay advance).
+                // Archive the previous track to history before replacing.
+                archiveCurrent()
                 currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
                 currentPlaylistId = playlistId
+                userClickedAt = .distantPast  // stop being protective
                 refreshNextQueueAndIds(forVideoId: id, playlistId: playlistId)
             }
         }
