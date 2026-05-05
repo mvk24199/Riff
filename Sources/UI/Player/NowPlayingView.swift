@@ -51,32 +51,32 @@ struct NowPlayingView: View {
             )
             .ignoresSafeArea()
 
-            // GeometryReader gives us the actual window dimensions so we
-            // can hand-compute leftPlayer's width — guarantees the pane
-            // gets its 380pt regardless of greedy layout behaviour.
-            GeometryReader { geo in
-                let paneWidth: CGFloat = 380
-                let spacing: CGFloat = 16
-                let horizPad: CGFloat = 48  // 24 each side
-                let topBarHeight: CGFloat = 60
-                let leftWidth = max(280, geo.size.width - paneWidth - spacing - horizPad)
-                let bodyHeight = geo.size.height - topBarHeight - 24
-
-                VStack(spacing: 0) {
-                    topBar
-                        .frame(width: geo.size.width, height: topBarHeight)
-
-                    HStack(spacing: spacing) {
-                        leftPlayer
-                            .frame(width: leftWidth, height: bodyHeight)
-                        sidePane
-                            .frame(width: paneWidth, height: bodyHeight)
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
+            // Side-pane layout. The earlier failure mode (topBar and pane
+            // invisible in fullscreen) was caused by the HStack's natural
+            // height: leftPlayer + sidePane content has a fixed intrinsic
+            // height (~600pt). Without an explicit maxHeight on the
+            // HStack, the parent VStack sized itself to topBar+HStack
+            // intrinsic = ~660pt and got centered in the fullscreen
+            // window — pushing topBar off the top and the right edge
+            // (and the pane) inward toward the centered VStack's bounds
+            // rather than the window's bounds. Forcing the HStack to
+            // .frame(maxHeight:.infinity) makes it (and therefore the
+            // parent VStack) span the full window height, so topBar
+            // lands at the top and the pane lands at the actual right
+            // edge.
+            VStack(spacing: 0) {
+                topBar
+                HStack(alignment: .top, spacing: 16) {
+                    leftPlayer
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    sidePane
+                        .frame(width: 380)
                 }
-                .frame(width: geo.size.width, height: geo.size.height)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -130,13 +130,44 @@ struct NowPlayingView: View {
         .padding(.vertical, 14)
     }
 
-    // MARK: - Left side: player
+    // MARK: - Player blocks (used by the vertical layout above)
 
+    private var artwork: some View {
+        let track = env.player.currentTrack
+        return AsyncImage(url: track?.thumbnailURL) { phase in
+            switch phase {
+            case .success(let img): img.resizable().aspectRatio(contentMode: .fit)
+            default: Color.white.opacity(0.06)
+            }
+        }
+        .frame(width: 320, height: 320)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
+    }
+
+    private var titleAndSubtitle: some View {
+        let track = env.player.currentTrack
+        return VStack(spacing: 4) {
+            Text(track?.title ?? "—")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            Text(track?.subtitle ?? "")
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 32)
+    }
+
+    /// Legacy left-column view from the side-pane experiment. Kept so any
+    /// stale references compile, but no longer rendered by `body`.
+    @ViewBuilder
     private var leftPlayer: some View {
         let track = env.player.currentTrack
-        return VStack(spacing: 22) {
+        VStack(spacing: 22) {
             Spacer(minLength: 8)
-
             AsyncImage(url: track?.thumbnailURL) { phase in
                 switch phase {
                 case .success(let img): img.resizable().aspectRatio(contentMode: .fit)
@@ -145,14 +176,10 @@ struct NowPlayingView: View {
             }
             .frame(width: 320, height: 320)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
-
             VStack(spacing: 4) {
                 Text(track?.title ?? "—")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
                 Text(track?.subtitle ?? "")
                     .font(.system(size: 14))
                     .foregroundStyle(.white.opacity(0.7))
@@ -169,7 +196,51 @@ struct NowPlayingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Right side: tabbed pane
+    // MARK: - Bottom tabs (vertical layout — Up Next / Lyrics / Related)
+
+    /// Used by the live vertical layout. Same content as `sidePane` but
+    /// renders inline beneath the player rather than as a side column.
+    private var bottomTabs: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 0) {
+                ForEach(BottomTab.allCases) { t in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { bottomTab = t }
+                    } label: {
+                        VStack(spacing: 6) {
+                            Text(t.rawValue)
+                                .font(.system(size: 13, weight: bottomTab == t ? .semibold : .regular))
+                                .foregroundStyle(bottomTab == t ? .white : .white.opacity(0.6))
+                            Rectangle()
+                                .fill(bottomTab == t ? Theme.red : Color.clear)
+                                .frame(height: 2)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Divider().background(Color.white.opacity(0.15))
+            Group {
+                switch bottomTab {
+                case .upNext:  upNextContent
+                case .lyrics:  lyricsContent
+                case .related: relatedContent
+                }
+            }
+            .id(bottomTab)
+            .transition(.opacity)
+        }
+        .padding(16)
+        .background(Color(white: 0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    // MARK: - (Legacy) side pane — unused by the live layout
 
     private var sidePane: some View {
         VStack(spacing: 14) {
