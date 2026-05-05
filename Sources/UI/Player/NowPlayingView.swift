@@ -95,12 +95,6 @@ struct NowPlayingView: View {
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
-        // macOS fullscreen reserves a safe area inset at top + sides
-        // (auto-hidden menu bar). Without this, the topBar and side pane
-        // get pushed inside that inset and effectively become invisible
-        // because the inset eats their position. Ignoring the safe area
-        // makes the layout span the actual window bounds.
-        .ignoresSafeArea(.all)
         .onExitCommand { env.player.isFullPlayerOpen = false }
         .onChange(of: bottomTab) { _, newTab in
             if newTab == .lyrics { env.player.loadLyricsIfNeeded() }
