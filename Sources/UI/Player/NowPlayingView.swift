@@ -77,6 +77,20 @@ struct NowPlayingView: View {
                 .padding(.bottom, 24)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Runtime size probe — tells us what frame SwiftUI actually
+            // assigned NowPlayingView. If width is much less than the
+            // actual window/screen width in fullscreen, the parent (RootView)
+            // is constraining the frame and that's where the bug lives.
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onAppear {
+                        Log.bridge.debug("[NowPlayingView geom] size=\(geo.size.width, format: .fixed(precision: 0))x\(geo.size.height, format: .fixed(precision: 0))")
+                    }
+                    .onChange(of: geo.size) { _, newSize in
+                        Log.bridge.debug("[NowPlayingView geom] resize=\(newSize.width, format: .fixed(precision: 0))x\(newSize.height, format: .fixed(precision: 0))")
+                    }
+                }
+            )
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
