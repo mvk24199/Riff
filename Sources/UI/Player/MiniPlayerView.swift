@@ -8,7 +8,6 @@ import SwiftUI
 ///   - whole strip is tappable but the action buttons short-circuit hits
 struct MiniPlayerView: View {
     @Environment(AppEnvironment.self) private var env
-    @State private var showFullPlayer = false
 
     var body: some View {
         let track = env.player.currentTrack
@@ -66,9 +65,8 @@ struct MiniPlayerView: View {
             .background(Color.black.opacity(0.92))
             .background(.ultraThinMaterial)
             .contentShape(Rectangle())
-            .onTapGesture { showFullPlayer = true }
+            .onTapGesture { env.player.isFullPlayerOpen = true }
         }
-        .sheet(isPresented: $showFullPlayer) { NowPlayingView() }
     }
 
     private func controlButton(systemName: String, size: CGFloat, action: @escaping () -> Void) -> some View {

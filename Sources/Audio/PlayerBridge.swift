@@ -13,7 +13,17 @@ final class PlayerBridge {
     var progress: Double { duration > 0 ? elapsed / duration : 0 }
     private(set) var currentTrack: Track? = nil
     private(set) var upNext: [MediaItem] = []
+    private(set) var related: [MediaItem] = []
+    private(set) var lyrics: String? = nil
+    private(set) var lyricsLoading: Bool = false
+    /// Whether the full-screen Now Playing view is presented.
+    var isFullPlayerOpen: Bool = false
     var hasTrack: Bool { currentTrack != nil }
+
+    /// Cached browse IDs from /next response — used to lazy-load lyrics
+    /// and related songs only when the user opens those tabs.
+    @ObservationIgnored private var lyricsBrowseId: String?
+    @ObservationIgnored private var relatedBrowseId: String?
 
     /// Fires after any state change (track, play/pause, progress). Used by
     /// AppEnvironment to drive NowPlayingCenter without coupling the two
@@ -73,8 +83,51 @@ final class PlayerBridge {
             thumbnailURL: item.thumbnailURL,
             duration: 0
         )
+        // Reset & pre-fetch surrounding context (queue + lyrics/related ids).
+        upNext = []
+        related = []
+        lyrics = nil
+        refreshNextQueueAndIds(forVideoId: item.id)
         onUpdate?()
         await play(videoId: item.id)
+    }
+
+    /// Pull /next for the given videoId — populates `upNext` and stashes
+    /// browse IDs for lyrics + related which are loaded on demand.
+    private func refreshNextQueueAndIds(forVideoId id: String) {
+        Task { [innerTube, weak self] in
+            guard let response = try? await innerTube.nextQueue(videoId: id, playlistId: nil) else { return }
+            await MainActor.run {
+                self?.upNext = response.queue
+                self?.lyricsBrowseId = response.lyricsBrowseId
+                self?.relatedBrowseId = response.relatedBrowseId
+                // Invalidate previously cached tab content for the old track.
+                self?.lyrics = nil
+                self?.related = []
+            }
+        }
+    }
+
+    /// Lazy-load lyrics on tab open. Sets `lyricsLoading` while in flight.
+    func loadLyricsIfNeeded() {
+        guard lyrics == nil, !lyricsLoading, let id = lyricsBrowseId else { return }
+        lyricsLoading = true
+        Task { [innerTube, weak self] in
+            let text = (try? await innerTube.lyrics(browseId: id)) ?? nil
+            await MainActor.run {
+                self?.lyrics = text ?? "Lyrics not available."
+                self?.lyricsLoading = false
+            }
+        }
+    }
+
+    /// Lazy-load related songs on tab open.
+    func loadRelatedIfNeeded() {
+        guard related.isEmpty, let id = relatedBrowseId else { return }
+        Task { [innerTube, weak self] in
+            let items = (try? await innerTube.related(browseId: id)) ?? []
+            await MainActor.run { self?.related = items }
+        }
     }
 
     /// Plays a known YT Music playlist (regular playlists where `id` is the
@@ -160,8 +213,6 @@ final class PlayerBridge {
             // adopt the JS-side metadata when the videoId actually changes
             // (autoplay advance).
             if currentTrack?.videoId == id {
-                // Same track; refresh duration if we now have it but skip
-                // title/artist/artwork churn.
                 if duration > 0, let existing = currentTrack, existing.duration == 0 {
                     currentTrack = Track(
                         videoId: existing.videoId,
@@ -173,10 +224,7 @@ final class PlayerBridge {
                 }
             } else {
                 currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
-                Task { [innerTube, weak self] in
-                    let queue = (try? await innerTube.nextQueue(videoId: id, playlistId: nil)) ?? []
-                    await MainActor.run { self?.upNext = queue }
-                }
+                refreshNextQueueAndIds(forVideoId: id)
             }
         }
         onUpdate?()

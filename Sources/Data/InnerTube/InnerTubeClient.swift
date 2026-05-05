@@ -309,16 +309,25 @@ final class InnerTubeClient: Sendable {
         return nil
     }
 
-    func nextQueue(videoId: String, playlistId: String?) async throws -> [MediaItem] {
+    /// Result of `/next`: queued tracks + browseIds for the lyrics and
+    /// related-songs tabs (which we fetch separately on demand).
+    struct NextResponse: Sendable {
+        let queue: [MediaItem]
+        let lyricsBrowseId: String?
+        let relatedBrowseId: String?
+    }
+
+    func nextQueue(videoId: String, playlistId: String?) async throws -> NextResponse {
         var payload: [String: Any] = ["videoId": videoId]
         if let pid = playlistId { payload["playlistId"] = pid }
         let body = try await postRaw(.next, body: payload)
-        let items = Parsing.array(body, "contents",
+
+        let queueItems = Parsing.array(body, "contents",
             "singleColumnMusicWatchNextResultsRenderer", "tabbedRenderer",
             "watchNextTabbedResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "musicQueueRenderer", "content", "playlistPanelRenderer",
             "contents") ?? []
-        return items.compactMap { item -> MediaItem? in
+        let queue: [MediaItem] = queueItems.compactMap { item -> MediaItem? in
             guard let r = item["playlistPanelVideoRenderer"] as? [String: Any] else { return nil }
             let videoId = Parsing.string(r, "videoId") ?? ""
             guard !videoId.isEmpty else { return nil }
@@ -327,6 +336,45 @@ final class InnerTubeClient: Sendable {
             let thumb = Parsing.thumbnailURL(r["thumbnail"] as? [String: Any])
             return MediaItem(id: videoId, kind: .song, title: title, subtitle: subtitle, thumbnailURL: thumb)
         }
+
+        // Tabs[1].endpoint.browseEndpoint.browseId → lyrics
+        // Tabs[2].endpoint.browseEndpoint.browseId → related
+        // The order is conventional but not guaranteed — match by tab title.
+        let tabs = Parsing.array(body, "contents",
+            "singleColumnMusicWatchNextResultsRenderer", "tabbedRenderer",
+            "watchNextTabbedResultsRenderer", "tabs") ?? []
+        var lyricsId: String?
+        var relatedId: String?
+        for tab in tabs {
+            guard let renderer = tab["tabRenderer"] as? [String: Any] else { continue }
+            let title = (renderer["title"] as? String)?.lowercased() ?? ""
+            let browseId = Parsing.string(renderer, "endpoint", "browseEndpoint", "browseId")
+            if title.contains("lyric"), browseId != nil { lyricsId = browseId }
+            else if title.contains("related"), browseId != nil { relatedId = browseId }
+        }
+        return NextResponse(queue: queue, lyricsBrowseId: lyricsId, relatedBrowseId: relatedId)
+    }
+
+    /// Fetch the lyrics text for a given lyrics browseId (extracted from
+    /// `/next`). Returns nil when the song has no lyrics or YT couldn't
+    /// match them.
+    func lyrics(browseId: String) async throws -> String? {
+        let body = try await postRaw(.browse, body: ["browseId": browseId])
+        // contents.sectionListRenderer.contents[0].musicDescriptionShelfRenderer.description.runs[].text
+        let shelf = Parsing.dig(body, ["contents", "sectionListRenderer", "contents", "0", "musicDescriptionShelfRenderer"]) as? [String: Any]
+        if let text = Parsing.runs(shelf, "description", separator: "") { return text }
+        // Some lyrics are returned with newline-separated runs; join with \n
+        if let runs = Parsing.dig(shelf, ["description", "runs"]) as? [[String: Any]] {
+            let joined = runs.compactMap { $0["text"] as? String }.joined()
+            return joined.isEmpty ? nil : joined
+        }
+        return nil
+    }
+
+    /// Fetch related songs for a given related browseId.
+    func related(browseId: String) async throws -> [MediaItem] {
+        let body = try await postRaw(.browse, body: ["browseId": browseId])
+        return Self.scanForMediaItems(body)
     }
 
     // MARK: - Parse helpers (private)

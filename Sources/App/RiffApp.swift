@@ -40,6 +40,14 @@ struct RootView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .overlay {
+            if env.player.isFullPlayerOpen {
+                NowPlayingView()
+                    .transition(.move(edge: .bottom))
+                    .zIndex(10)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: env.player.isFullPlayerOpen)
         .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: $env.isSignInSheetPresented) {
             SignInView()
