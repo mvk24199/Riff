@@ -25,6 +25,10 @@ final class PlayerBridge {
     /// and related songs only when the user opens those tabs.
     @ObservationIgnored private var lyricsBrowseId: String?
     @ObservationIgnored private var relatedBrowseId: String?
+    /// Playlist ID extracted from the current /watch URL. Required to fetch
+    /// the right Up Next queue when playing inside a playlist (without it,
+    /// /next returns radio-style suggestions instead of the playlist's tracks).
+    @ObservationIgnored private var currentPlaylistId: String?
 
     /// Fires after any state change (track, play/pause, progress). Used by
     /// AppEnvironment to drive NowPlayingCenter without coupling the two
@@ -88,16 +92,19 @@ final class PlayerBridge {
         upNext = []
         related = []
         lyrics = nil
-        refreshNextQueueAndIds(forVideoId: item.id)
+        currentPlaylistId = nil
+        refreshNextQueueAndIds(forVideoId: item.id, playlistId: nil)
         onUpdate?()
         await play(videoId: item.id)
     }
 
     /// Pull /next for the given videoId — populates `upNext` and stashes
     /// browse IDs for lyrics + related which are loaded on demand.
-    private func refreshNextQueueAndIds(forVideoId id: String) {
+    /// Pass `playlistId` when known so /next returns the playlist's track
+    /// list instead of generic radio suggestions.
+    private func refreshNextQueueAndIds(forVideoId id: String, playlistId: String?) {
         Task { [innerTube, weak self] in
-            guard let response = try? await innerTube.nextQueue(videoId: id, playlistId: nil) else { return }
+            guard let response = try? await innerTube.nextQueue(videoId: id, playlistId: playlistId) else { return }
             await MainActor.run {
                 self?.upNext = response.queue
                 self?.lyricsBrowseId = response.lyricsBrowseId
@@ -224,14 +231,7 @@ final class PlayerBridge {
         case .progress(let t, let d):
             elapsed = t
             duration = d
-        case .trackChanged(let id, let title, let artist, let art):
-            // YT Music plays 2-3 video ads before each track for anonymous
-            // sessions. Each ad fires trackChanged with its own metadata,
-            // but the URL videoId stays at the song the user clicked.
-            // Ignore events that match the videoId we already have — we
-            // trust the MediaItem-derived metadata over the ad's. Only
-            // adopt the JS-side metadata when the videoId actually changes
-            // (autoplay advance).
+        case .trackChanged(let id, let playlistId, let title, let artist, let art):
             if currentTrack?.videoId == id {
                 if duration > 0, let existing = currentTrack, existing.duration == 0 {
                     currentTrack = Track(
@@ -244,7 +244,8 @@ final class PlayerBridge {
                 }
             } else {
                 currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
-                refreshNextQueueAndIds(forVideoId: id)
+                currentPlaylistId = playlistId
+                refreshNextQueueAndIds(forVideoId: id, playlistId: playlistId)
             }
         }
         onUpdate?()

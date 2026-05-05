@@ -60,15 +60,18 @@
     let lastTrackKey = "";
     function pollTrack() {
         const md = navigator.mediaSession && navigator.mediaSession.metadata;
-        const videoId = new URL(location.href).searchParams.get("v");
+        const url = new URL(location.href);
+        const videoId = url.searchParams.get("v");
+        const playlistId = url.searchParams.get("list");
         if (!md || !videoId) return;
-        const key = videoId + "|" + (md.title || "");
+        const key = videoId + "|" + (md.title || "") + "|" + (playlistId || "");
         if (key === lastTrackKey) return;
         lastTrackKey = key;
         const artwork = (md.artwork && md.artwork.length > 0) ? md.artwork[md.artwork.length - 1].src : null;
         postEvent({
             event: "trackChanged",
             videoId: videoId,
+            playlistId: playlistId,
             title:   md.title  || "",
             artist:  md.artist || "",
             artwork: artwork,

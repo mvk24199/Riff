@@ -18,7 +18,7 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
         case ready
         case stateChanged(isPlaying: Bool)
         case progress(currentTime: Double, duration: Double)
-        case trackChanged(videoId: String, title: String, artist: String, artwork: URL?)
+        case trackChanged(videoId: String, playlistId: String?, title: String, artist: String, artwork: URL?)
     }
 
     override init() {
@@ -90,10 +90,11 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
             return .progress(currentTime: currentTime, duration: duration)
         case "trackChanged":
             guard let videoId = body["videoId"] as? String else { return nil }
+            let playlistId = body["playlistId"] as? String
             let title = (body["title"] as? String) ?? ""
             let artist = (body["artist"] as? String) ?? ""
             let artwork = (body["artwork"] as? String).flatMap(URL.init(string:))
-            return .trackChanged(videoId: videoId, title: title, artist: artist, artwork: artwork)
+            return .trackChanged(videoId: videoId, playlistId: playlistId, title: title, artist: artist, artwork: artwork)
         default:
             return nil
         }
