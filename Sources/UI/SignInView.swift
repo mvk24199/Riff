@@ -52,6 +52,9 @@ private struct SignInWebView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let view = WKWebView(frame: .zero, configuration: config)
+        // Pose as Chrome — YT Music's web app blocks Safari/WebKit with a
+        // "not optimized for your browser" interstitial.
+        view.customUserAgent = InnerTubeClient.userAgent
         view.navigationDelegate = context.coordinator
         view.load(URLRequest(url: URL(string: "https://music.youtube.com/")!))
         return view

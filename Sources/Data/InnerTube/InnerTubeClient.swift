@@ -23,7 +23,12 @@ final class InnerTubeClient: Sendable {
     static let clientVersion = "1.20260501.00.00"
     static let clientNameID = "67"  // X-YouTube-Client-Name for WEB_REMIX
 
-    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+    /// Pretend to be Chrome on macOS. YouTube Music gates its web app
+    /// (and several InnerTube endpoints) to Chrome — Safari/WebKit gets a
+    /// "not optimized for your browser" interstitial. We use the same UA
+    /// across the InnerTube HTTP client, the sign-in WKWebView, and the
+    /// hidden audio WKWebView so the three are indistinguishable to YT.
+    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
     private let session: URLSession
 

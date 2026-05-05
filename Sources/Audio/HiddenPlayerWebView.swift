@@ -32,6 +32,8 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
         config.mediaTypesRequiringUserActionForPlayback = []
 
         self.webView = WKWebView(frame: .init(x: 0, y: 0, width: 1, height: 1), configuration: config)
+        // Pose as Chrome — YT Music's web app gates Safari/WebKit.
+        self.webView.customUserAgent = InnerTubeClient.userAgent
 
         self.window = NSWindow(
             contentRect: .init(x: -1000, y: -1000, width: 1, height: 1),
