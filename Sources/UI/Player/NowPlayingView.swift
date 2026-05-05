@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// Full-screen player. Inspired by YT Music iOS:
-///   - hero blurred backdrop fed by current artwork
-///   - centered square album art with a soft shadow for depth
-///   - draggable scrubber with elapsed / remaining time labels
-///   - large red play button (the only chromatic element)
-///   - bottom tabbed area: Up Next / Lyrics / Related
+/// Full-screen player. Layout matches YT Music desktop:
+///   - hero blurred backdrop (whole window)
+///   - left side: artwork + title + scrubber + transport
+///   - right side: tabbed pane Up Next / Lyrics / Related
+///   - top bar: prominent close button (chevron-down) + "Now Playing"
+///   - ESC dismisses
 struct NowPlayingView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var scrubbing: Double? = nil
@@ -19,9 +19,6 @@ struct NowPlayingView: View {
         var id: String { rawValue }
     }
 
-    /// Tuner-style modes that bias the autoplay queue. Visual surface for
-    /// now — the params token-to-mode mapping isn't published; selecting a
-    /// mode keeps the same queue but shows the user the affordance.
     enum QueueMode: String, CaseIterable, Identifiable {
         case related = "Related"
         case discover = "Discover"
@@ -34,10 +31,13 @@ struct NowPlayingView: View {
     var body: some View {
         let track = env.player.currentTrack
         ZStack {
-            // Hero blurred backdrop
+            // Solid black base so the underlying tab content can never bleed through.
+            Color.black.ignoresSafeArea()
+
+            // Hero blurred backdrop fed by the artwork.
             AsyncImage(url: track?.thumbnailURL) { phase in
                 if case .success(let img) = phase {
-                    img.resizable().scaledToFill().blur(radius: 70).opacity(0.55)
+                    img.resizable().scaledToFill().blur(radius: 80).opacity(0.45)
                 } else {
                     LinearGradient(colors: [Color(white: 0.08), .black],
                                    startPoint: .top, endPoint: .bottom)
@@ -46,7 +46,7 @@ struct NowPlayingView: View {
             .ignoresSafeArea()
 
             LinearGradient(
-                colors: [Color.black.opacity(0.25), Color.black.opacity(0.7)],
+                colors: [Color.black.opacity(0.45), Color.black.opacity(0.78)],
                 startPoint: .top, endPoint: .bottom
             )
             .ignoresSafeArea()
@@ -54,46 +54,20 @@ struct NowPlayingView: View {
             VStack(spacing: 0) {
                 topBar
 
-                ScrollView {
-                    VStack(spacing: 24) {
-                        Spacer(minLength: 16)
-
-                        AsyncImage(url: track?.thumbnailURL) { phase in
-                            switch phase {
-                            case .success(let img): img.resizable().aspectRatio(contentMode: .fit)
-                            default: Color.white.opacity(0.06)
-                            }
-                        }
-                        .frame(maxWidth: 360, maxHeight: 360)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                        .shadow(color: .black.opacity(0.6), radius: 30, y: 12)
-
-                        VStack(spacing: 6) {
-                            Text(track?.title ?? "—")
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundStyle(.white)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-                            Text(track?.subtitle ?? "")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.white.opacity(0.7))
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 32)
-
-                        scrubber
-                        playbackControls
-
-                        bottomTabs
-
-                        Spacer(minLength: 24)
-                    }
-                    .padding(.bottom, 48)
+                HStack(alignment: .top, spacing: 32) {
+                    leftPlayer
+                        .frame(maxWidth: .infinity)
+                    sidePane
+                        .frame(width: 360)
                 }
+                .padding(.horizontal, 32)
+                .padding(.bottom, 24)
             }
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .onExitCommand { env.player.isFullPlayerOpen = false }
         .onChange(of: bottomTab) { _, newTab in
             if newTab == .lyrics { env.player.loadLyricsIfNeeded() }
             if newTab == .related { env.player.loadRelatedIfNeeded() }
@@ -107,14 +81,21 @@ struct NowPlayingView: View {
             Button {
                 env.player.isFullPlayerOpen = false
             } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.06))
-                    .clipShape(Circle())
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Close")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.1))
+                .clipShape(Capsule())
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+
             Spacer()
             Text("Now Playing")
                 .font(.system(size: 11, weight: .semibold))
@@ -122,11 +103,87 @@ struct NowPlayingView: View {
                 .textCase(.uppercase)
                 .tracking(1.2)
             Spacer()
-            // Symmetry placeholder — keeps the title centered.
-            Color.clear.frame(width: 36, height: 36)
+            // Symmetry placeholder.
+            Color.clear.frame(width: 88, height: 32)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
+    }
+
+    // MARK: - Left side: player
+
+    private var leftPlayer: some View {
+        let track = env.player.currentTrack
+        return VStack(spacing: 22) {
+            Spacer(minLength: 8)
+
+            AsyncImage(url: track?.thumbnailURL) { phase in
+                switch phase {
+                case .success(let img): img.resizable().aspectRatio(contentMode: .fit)
+                default: Color.white.opacity(0.06)
+                }
+            }
+            .frame(maxWidth: 360, maxHeight: 360)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
+
+            VStack(spacing: 4) {
+                Text(track?.title ?? "—")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                Text(track?.subtitle ?? "")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
+            }
+
+            scrubber
+            playbackControls
+                .padding(.top, 4)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Right side: tabbed pane
+
+    private var sidePane: some View {
+        VStack(spacing: 14) {
+            // Tab pills along the top of the side pane.
+            HStack(spacing: 0) {
+                ForEach(BottomTab.allCases) { t in
+                    Button { bottomTab = t } label: {
+                        VStack(spacing: 6) {
+                            Text(t.rawValue)
+                                .font(.system(size: 13, weight: bottomTab == t ? .semibold : .regular))
+                                .foregroundStyle(bottomTab == t ? .white : .white.opacity(0.55))
+                            Rectangle()
+                                .fill(bottomTab == t ? Theme.red : Color.clear)
+                                .frame(height: 2)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Divider().background(Theme.divider)
+
+            // Selected tab content fills remaining height.
+            ScrollView {
+                switch bottomTab {
+                case .upNext:  upNextContent
+                case .lyrics:  lyricsContent
+                case .related: relatedContent
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Scrubber
@@ -154,11 +211,10 @@ struct NowPlayingView: View {
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundStyle(.white.opacity(0.6))
         }
-        .padding(.horizontal, 32)
     }
 
     private var playbackControls: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 22) {
             controlButton(
                 systemName: env.player.liked ? "heart.fill" : "heart",
                 size: 20,
@@ -166,20 +222,20 @@ struct NowPlayingView: View {
             ) {
                 Task { await env.player.toggleLike() }
             }
-            controlButton(systemName: "backward.fill", size: 24, tint: .white) {
+            controlButton(systemName: "backward.fill", size: 22, tint: .white) {
                 Task { await env.player.previous() }
             }
             ZStack {
                 Circle().fill(Theme.red)
-                    .frame(width: 72, height: 72)
+                    .frame(width: 64, height: 64)
                     .shadow(color: Theme.red.opacity(0.4), radius: 12, y: 4)
                 Image(systemName: env.player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 28, weight: .bold))
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundStyle(.white)
                     .offset(x: env.player.isPlaying ? 0 : 2)
             }
             .onTapGesture { Task { await env.player.togglePlay() } }
-            controlButton(systemName: "forward.fill", size: 24, tint: .white) {
+            controlButton(systemName: "forward.fill", size: 22, tint: .white) {
                 Task { await env.player.next() }
             }
             controlButton(systemName: "shuffle", size: 18, tint: .white.opacity(0.6)) { }
@@ -191,7 +247,7 @@ struct NowPlayingView: View {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(tint)
-                .frame(width: 44, height: 44)
+                .frame(width: 40, height: 40)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -203,54 +259,18 @@ struct NowPlayingView: View {
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
-    // MARK: - Bottom tabs
-
-    private var bottomTabs: some View {
-        VStack(spacing: 14) {
-            // Tab pills
-            HStack(spacing: 0) {
-                ForEach(BottomTab.allCases) { t in
-                    Button { bottomTab = t } label: {
-                        VStack(spacing: 4) {
-                            Text(t.rawValue)
-                                .font(.system(size: 13, weight: bottomTab == t ? .semibold : .regular))
-                                .foregroundStyle(bottomTab == t ? .white : .white.opacity(0.55))
-                            Rectangle()
-                                .fill(bottomTab == t ? Theme.red : Color.clear)
-                                .frame(height: 2)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 24)
-
-            // Selected tab content
-            Group {
-                switch bottomTab {
-                case .upNext:  upNextContent
-                case .lyrics:  lyricsContent
-                case .related: relatedContent
-                }
-            }
-            .padding(.horizontal, 24)
-        }
-        .frame(maxWidth: 720)
-        .padding(.top, 8)
-    }
+    // MARK: - Tab content
 
     private var upNextContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Tuner-style mode pills.
+        VStack(alignment: .leading, spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     ForEach(QueueMode.allCases) { mode in
                         Button { queueMode = mode } label: {
                             Text(mode.rawValue)
-                                .font(.system(size: 12, weight: .semibold))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 7)
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
                                 .background(queueMode == mode ? Theme.red : Color.white.opacity(0.06))
                                 .foregroundStyle(queueMode == mode ? .white : .white.opacity(0.85))
                                 .clipShape(Capsule())
@@ -261,7 +281,7 @@ struct NowPlayingView: View {
             }
 
             if env.player.upNext.isEmpty {
-                emptyHint("No queue yet — start a song to populate Up Next.")
+                emptyHint("Queue empty.")
             } else {
                 queueList(env.player.upNext)
             }
@@ -281,15 +301,15 @@ struct NowPlayingView: View {
                 .padding(.vertical, 16)
             } else if let text = env.player.lyrics, !text.isEmpty {
                 Text(text)
-                    .font(.system(size: 14))
+                    .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.85))
-                    .lineSpacing(6)
+                    .lineSpacing(5)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             } else {
                 emptyHint("Lyrics not available for this track.")
             }
         }
-        .padding(.vertical, 4)
     }
 
     private var relatedContent: some View {
@@ -308,7 +328,7 @@ struct NowPlayingView: View {
                 Button {
                     Task { await env.player.play(item: item) }
                 } label: {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 10) {
                         AsyncImage(url: item.thumbnailURL) { phase in
                             if case .success(let img) = phase {
                                 img.resizable().aspectRatio(contentMode: .fill)
@@ -316,24 +336,24 @@ struct NowPlayingView: View {
                                 Color.white.opacity(0.06)
                             }
                         }
-                        .frame(width: 40, height: 40)
+                        .frame(width: 36, height: 36)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title)
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
                             Text(item.subtitle)
-                                .font(.system(size: 11))
+                                .font(.system(size: 10))
                                 .foregroundStyle(.white.opacity(0.55))
                                 .lineLimit(1)
                         }
                         Spacer()
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 5)
                     .background(Color.white.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
             }
@@ -342,15 +362,13 @@ struct NowPlayingView: View {
 
     private func emptyHint(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 13))
+            .font(.system(size: 12))
             .foregroundStyle(.white.opacity(0.55))
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 16)
+            .padding(.vertical, 12)
     }
 }
 
-/// Continuous-value slider with a custom track + thumb. SwiftUI's stock
-/// Slider doesn't fit the dark, minimal look; this keeps it under one file.
 private struct ScrubberSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>

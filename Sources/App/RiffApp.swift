@@ -33,18 +33,21 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var env = env
-        ZStack(alignment: .bottom) {
-            MainTabs()
-            if env.player.hasTrack {
-                MiniPlayerView()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .overlay {
+        ZStack {
+            // Swap the entire main content rather than overlay it. SwiftUI's
+            // .overlay was rendering around (rather than over) the
+            // NavigationStack-wrapped tabs, leaking the home content through.
             if env.player.isFullPlayerOpen {
                 NowPlayingView()
                     .transition(.move(edge: .bottom))
-                    .zIndex(10)
+            } else {
+                ZStack(alignment: .bottom) {
+                    MainTabs()
+                    if env.player.hasTrack {
+                        MiniPlayerView()
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
             }
         }
         .animation(.easeInOut(duration: 0.25), value: env.player.isFullPlayerOpen)

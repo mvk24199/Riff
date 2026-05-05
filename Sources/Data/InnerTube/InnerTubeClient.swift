@@ -59,7 +59,9 @@ final class InnerTubeClient: Sendable {
         let shelves = Parsing.array(body, "contents",
             "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
-        return shelves.compactMap(Self.parseHomeShelf)
+        let sections = shelves.compactMap(Self.parseHomeShelf)
+        Log.innertube.debug("home shelves=\(shelves.count) sections=\(sections.count)")
+        return sections
     }
 
     func search(query: String, filter: SearchView.SearchFilter) async throws -> [MediaItem] {
@@ -469,12 +471,60 @@ final class InnerTubeClient: Sendable {
 
     // MARK: - Parse helpers (private)
 
-    /// `musicCarouselShelfRenderer` → `HomeSection`.
+    /// Handles every shelf shape we've seen on YT Music's home:
+    ///   - `musicCarouselShelfRenderer`     — typical horizontal carousel
+    ///   - `musicImmersiveCarouselShelfRenderer` — taller hero carousel
+    ///   - `musicShelfRenderer`             — list-style rows (e.g. "Trending songs")
+    ///   - `musicCardShelfRenderer`         — single hero card with featured action
+    ///   - `gridRenderer`                   — grid of tiles
+    /// Falls back to scanForMediaItems for anything else so we never silently
+    /// drop a section.
     private static func parseHomeShelf(_ shelf: [String: Any]) -> HomeSection? {
-        guard let r = shelf["musicCarouselShelfRenderer"] as? [String: Any] else { return nil }
-        let title = Parsing.runs(r, "header", "musicCarouselShelfBasicHeaderRenderer", "title") ?? ""
-        let contents = r["contents"] as? [[String: Any]] ?? []
-        let items = contents.compactMap(parseTwoRowItem)
+        // Carousel of two-row tiles (Listen again, Mixed for you, …)
+        if let r = shelf["musicCarouselShelfRenderer"] as? [String: Any] {
+            let title = Parsing.runs(r, "header", "musicCarouselShelfBasicHeaderRenderer", "title") ?? ""
+            let contents = r["contents"] as? [[String: Any]] ?? []
+            let items = contents.compactMap(parseTwoRowItem)
+            return finalize(title: title, items: items)
+        }
+        // Immersive carousel (New releases hero strip, etc.)
+        if let r = shelf["musicImmersiveCarouselShelfRenderer"] as? [String: Any] {
+            let title = Parsing.runs(r, "header", "musicCarouselShelfBasicHeaderRenderer", "title") ?? ""
+            let contents = r["contents"] as? [[String: Any]] ?? []
+            let items = contents.compactMap(parseTwoRowItem)
+            return finalize(title: title, items: items)
+        }
+        // Row-list shelf (Trending songs, etc.)
+        if let r = shelf["musicShelfRenderer"] as? [String: Any] {
+            let title = Parsing.runs(r, "title") ?? Parsing.string(r, "title", "runs", "0", "text") ?? ""
+            let contents = r["contents"] as? [[String: Any]] ?? []
+            let items = contents.compactMap(parseListItem)
+            return finalize(title: title, items: items)
+        }
+        // Single-card hero shelf.
+        if let r = shelf["musicCardShelfRenderer"] as? [String: Any] {
+            let title = Parsing.runs(r, "title") ?? ""
+            let items = scanForMediaItems(r)
+            return finalize(title: title, items: items)
+        }
+        // Grid of tiles.
+        if let r = shelf["gridRenderer"] as? [String: Any] {
+            let title = Parsing.string(r, "header", "gridHeaderRenderer", "title", "runs", "0", "text") ?? ""
+            let items = (r["items"] as? [[String: Any]] ?? []).compactMap(parseTwoRowItem)
+            return finalize(title: title, items: items)
+        }
+        // Last-ditch: deep scan for any items inside, label by any title we
+        // can find. This keeps unknown shelf types from being silently
+        // dropped — better to render them with a generic header.
+        let items = scanForMediaItems(shelf)
+        if !items.isEmpty {
+            let title = Parsing.runs(shelf, "header", "musicCarouselShelfBasicHeaderRenderer", "title") ?? "More"
+            return finalize(title: title, items: items)
+        }
+        return nil
+    }
+
+    private static func finalize(title: String, items: [MediaItem]) -> HomeSection? {
         guard !items.isEmpty else { return nil }
         return HomeSection(id: title.isEmpty ? UUID().uuidString : title, title: title, items: items)
     }
