@@ -55,13 +55,60 @@ final class InnerTubeClient: Sendable {
     // MARK: - Public API
 
     func browseHome() async throws -> [HomeSection] {
+        // Initial /browse — 3 shelves typically come back here.
         let body = try await postRaw(.browse, body: ["browseId": BrowseID.home])
-        let shelves = Parsing.array(body, "contents",
+        let initialShelves = Parsing.array(body, "contents",
             "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
-        let sections = shelves.compactMap(Self.parseHomeShelf)
-        Log.innertube.debug("home shelves=\(shelves.count) sections=\(sections.count)")
+        var sections = initialShelves.compactMap(Self.parseHomeShelf)
+        var continuation = Self.findContinuationToken(in: body)
+
+        // Pull continuations until exhausted or we hit the safety cap.
+        // YT Music's iOS app streams these as you scroll; we batch them
+        // up-front so the home tab feels populated on first load.
+        var iterations = 0
+        let maxIterations = 6
+        while let token = continuation, iterations < maxIterations {
+            iterations += 1
+            do {
+                let resp = try await postRaw(.browse, body: ["continuation": token])
+                let moreShelves = Parsing.array(resp, "continuationContents",
+                    "sectionListContinuation", "contents") ?? []
+                let moreSections = moreShelves.compactMap(Self.parseHomeShelf)
+                sections.append(contentsOf: moreSections)
+                continuation = Self.findContinuationToken(in: resp)
+                Log.innertube.debug("home continuation \(iterations) → +\(moreSections.count) sections (total=\(sections.count))")
+            } catch {
+                Log.innertube.error("home continuation \(iterations) failed: \(error.localizedDescription, privacy: .public)")
+                break
+            }
+        }
+        Log.innertube.debug("home final sections=\(sections.count)")
         return sections
+    }
+
+    /// Walk a /browse response (initial or continuation-chunk) and return
+    /// the next continuation token, if YT included one.
+    private static func findContinuationToken(in body: [String: Any]) -> String? {
+        // Initial response shape: contents…sectionListRenderer.continuations[0]
+        //                            .nextContinuationData.continuation
+        // Continuation response shape: continuationContents.sectionListContinuation.continuations[…]
+        let paths: [[String]] = [
+            ["contents", "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+             "content", "sectionListRenderer", "continuations", "0",
+             "nextContinuationData", "continuation"],
+            ["continuationContents", "sectionListContinuation", "continuations", "0",
+             "nextContinuationData", "continuation"],
+            ["contents", "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+             "content", "sectionListRenderer", "continuations", "0",
+             "reloadContinuationData", "continuation"],
+        ]
+        for path in paths {
+            if let token = Parsing.dig(body, path) as? String, !token.isEmpty {
+                return token
+            }
+        }
+        return nil
     }
 
     func search(query: String, filter: SearchView.SearchFilter) async throws -> [MediaItem] {
