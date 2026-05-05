@@ -220,9 +220,14 @@ final class InnerTubeClient: Sendable {
             ? (Parsing.runs(cols[1], "musicResponsiveListItemFlexColumnRenderer", "text") ?? "")
             : ""
 
-        // Determine kind + id from the navigationEndpoint of the title cell.
-        let endpoint = Parsing.dig(cols.first, ["musicResponsiveListItemFlexColumnRenderer", "text", "runs", "0", "navigationEndpoint"]) as? [String: Any]
-        guard let (id, kind) = endpointToIdKind(endpoint) else { return nil }
+        // Songs put the navigation on the title cell's first run
+        // (watchEndpoint, "click the title to play"). Albums / artists /
+        // playlists put it at the row level (browseEndpoint, "click the row
+        // to open the page"). Try cell first, then row.
+        let titleEndpoint = Parsing.dig(cols.first, ["musicResponsiveListItemFlexColumnRenderer", "text", "runs", "0", "navigationEndpoint"]) as? [String: Any]
+        let rowEndpoint = r["navigationEndpoint"] as? [String: Any]
+        guard let resolved = endpointToIdKind(titleEndpoint) ?? endpointToIdKind(rowEndpoint) else { return nil }
+        let (id, kind) = resolved
         let thumb = Parsing.thumbnailURL(Parsing.dig(r, ["thumbnail", "musicThumbnailRenderer", "thumbnail"]) as? [String: Any])
         return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle, thumbnailURL: thumb)
     }
