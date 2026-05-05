@@ -40,12 +40,17 @@ struct SearchView: View {
             .padding(.horizontal, 24)
 
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], spacing: 16) {
-                    ForEach(results) { item in
-                        ThumbnailButton(item: item)
+                if results.isEmpty, !query.isEmpty {
+                    EmptySearchState(query: query)
+                        .padding(.top, 80)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], spacing: 16) {
+                        ForEach(results) { item in
+                            ThumbnailButton(item: item)
+                        }
                     }
+                    .padding(.horizontal, 24)
                 }
-                .padding(.horizontal, 24)
             }
         }
         // Re-run on every (query, filter) change. The 300ms debounce
@@ -59,6 +64,24 @@ struct SearchView: View {
     private struct SearchInput: Hashable {
         let query: String
         let filter: SearchFilter
+    }
+
+    private struct EmptySearchState: View {
+        let query: String
+        var body: some View {
+            VStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.white.opacity(0.4))
+                Text("No results for \u{201C}\(query)\u{201D}")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                Text("Try a different keyword or filter.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 
     private func debouncedRunSearch() async {

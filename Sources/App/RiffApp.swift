@@ -65,6 +65,7 @@ struct MainTabs: View {
 }
 
 struct TopTabBar: View {
+    @Environment(AppEnvironment.self) private var env
     @Binding var selection: MainTabs.Tab
 
     var body: some View {
@@ -73,6 +74,7 @@ struct TopTabBar: View {
             tab("Search", .search)
             tab("Library", .library)
             Spacer()
+            AccountMenu()
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
@@ -85,5 +87,37 @@ struct TopTabBar: View {
                 .foregroundStyle(selection == value ? .white : .secondary)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Top-right corner. Shows a "Sign In" pill when anonymous, a circular
+/// initial avatar with a Menu (Sign Out) when authenticated. Lets users
+/// see and manage auth state without going to the menu bar.
+private struct AccountMenu: View {
+    @Environment(AppEnvironment.self) private var env
+
+    var body: some View {
+        if env.isSignedIn {
+            Menu {
+                Button("Sign Out") { env.signOut() }
+            } label: {
+                Circle()
+                    .fill(Theme.red)
+                    .frame(width: 28, height: 28)
+                    .overlay(
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                    )
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 28, height: 28)
+        } else {
+            Button("Sign In") { env.isSignInSheetPresented = true }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.red)
+                .controlSize(.small)
+        }
     }
 }
