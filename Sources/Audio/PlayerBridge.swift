@@ -8,9 +8,17 @@ import Observation
 @MainActor
 final class PlayerBridge {
     private(set) var isPlaying: Bool = false
-    private(set) var progress: Double = 0  // 0...1
+    private(set) var elapsed: Double = 0   // seconds
+    private(set) var duration: Double = 0  // seconds; 0 until the page reports it
+    var progress: Double { duration > 0 ? elapsed / duration : 0 }
     private(set) var currentTrack: Track? = nil
     var hasTrack: Bool { currentTrack != nil }
+
+    /// Fires after any state change (track, play/pause, progress). Used by
+    /// AppEnvironment to drive NowPlayingCenter without coupling the two
+    /// classes directly. @ObservationIgnored: this is plumbing, not state.
+    @ObservationIgnored
+    var onUpdate: (() -> Void)?
 
     @ObservationIgnored
     private lazy var webBridge: HiddenPlayerWebView = {
@@ -58,10 +66,12 @@ final class PlayerBridge {
         case .stateChanged(let playing):
             isPlaying = playing
         case .progress(let t, let d):
-            progress = d > 0 ? t / d : 0
+            elapsed = t
+            duration = d
         case .trackChanged(let id, let title, let artist, let art):
-            currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: 0)
+            currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
         }
+        onUpdate?()
     }
 }
 

@@ -24,5 +24,19 @@ final class AppEnvironment {
         self.player = PlayerBridge()
         self.nowPlaying = NowPlayingCenter(player: player)
         self.hasSignedIn = UserDefaults.standard.bool(forKey: Self.signedInKey)
+
+        // Mirror PlayerBridge state into MPNowPlayingInfoCenter on every
+        // change. NowPlayingCenter holds a strong ref to player; here we go
+        // the other way without retaining nowPlaying strongly inside player.
+        self.player.onUpdate = { [weak self] in
+            guard let self, let track = self.player.currentTrack else { return }
+            self.nowPlaying.update(
+                title: track.title,
+                artist: track.subtitle,
+                artwork: track.thumbnailURL,
+                duration: self.player.duration,
+                elapsed: self.player.elapsed
+            )
+        }
     }
 }

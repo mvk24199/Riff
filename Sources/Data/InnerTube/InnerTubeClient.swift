@@ -13,7 +13,7 @@ import Foundation
 /// Stability notes: every endpoint we depend on has a snapshot fixture in tests.
 /// A nightly CI job hits live endpoints with a sentinel account to surface
 /// Google-side breakage early.
-final class InnerTubeClient {
+final class InnerTubeClient: Sendable {
     static let baseURL = URL(string: "https://music.youtube.com/youtubei/v1/")!
 
     /// Bumped together when Google changes the protocol on us.

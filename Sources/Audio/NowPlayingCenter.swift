@@ -31,7 +31,7 @@ final class NowPlayingCenter {
 
     /// Call after a track change with up-to-date metadata.
     func update(title: String, artist: String, artwork: URL?, duration: Double, elapsed: Double) {
-        var info: [String: Any] = [
+        let info: [String: Any] = [
             MPMediaItemPropertyTitle: title,
             MPMediaItemPropertyArtist: artist,
             MPMediaItemPropertyPlaybackDuration: duration,

@@ -57,7 +57,37 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
 
     // MARK: WKScriptMessageHandler
 
-    nonisolated func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
-        // Decode message.body and forward via onEvent on the main actor.
+    /// WKScriptMessageHandler is delivered on the main thread; decode the
+    /// `{event, …}` payload posted from player-bridge.js and forward to
+    /// `onEvent`.
+    func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+              let name = body["event"] as? String,
+              let event = Self.decode(eventName: name, body: body)
+        else { return }
+
+        onEvent?(event)
+    }
+
+    private static func decode(eventName: String, body: [String: Any]) -> BridgeEvent? {
+        switch eventName {
+        case "ready":
+            return .ready
+        case "stateChanged":
+            guard let isPlaying = body["isPlaying"] as? Bool else { return nil }
+            return .stateChanged(isPlaying: isPlaying)
+        case "progress":
+            let currentTime = (body["currentTime"] as? Double) ?? 0
+            let duration = (body["duration"] as? Double) ?? 0
+            return .progress(currentTime: currentTime, duration: duration)
+        case "trackChanged":
+            guard let videoId = body["videoId"] as? String else { return nil }
+            let title = (body["title"] as? String) ?? ""
+            let artist = (body["artist"] as? String) ?? ""
+            let artwork = (body["artwork"] as? String).flatMap(URL.init(string:))
+            return .trackChanged(videoId: videoId, title: title, artist: artist, artwork: artwork)
+        default:
+            return nil
+        }
     }
 }

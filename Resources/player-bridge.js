@@ -58,6 +58,28 @@
         v.addEventListener("ended",      () => postEvent({ event: "stateChanged", isPlaying: false }));
     }
 
+    // Watch navigator.mediaSession.metadata + the URL videoId together — that
+    // pair changes whenever the page advances to a new track. Polling is the
+    // most reliable signal; YT Music doesn't fire a public event we can hook.
+    let lastTrackKey = "";
+    function pollTrack() {
+        const md = navigator.mediaSession && navigator.mediaSession.metadata;
+        const videoId = new URL(location.href).searchParams.get("v");
+        if (!md || !videoId) return;
+        const key = videoId + "|" + (md.title || "");
+        if (key === lastTrackKey) return;
+        lastTrackKey = key;
+        const artwork = (md.artwork && md.artwork.length > 0) ? md.artwork[md.artwork.length - 1].src : null;
+        postEvent({
+            event: "trackChanged",
+            videoId: videoId,
+            title:   md.title  || "",
+            artist:  md.artist || "",
+            artwork: artwork,
+        });
+    }
+    setInterval(pollTrack, 500);
+
     // Re-attach as the page reorders the DOM.
     new MutationObserver(attachEvents).observe(document.documentElement, { childList: true, subtree: true });
     document.addEventListener("DOMContentLoaded", () => {
