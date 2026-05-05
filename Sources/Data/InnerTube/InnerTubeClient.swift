@@ -59,10 +59,37 @@ final class InnerTubeClient: Sendable {
         let shelves = Parsing.array(body, "contents",
             "tabbedSearchResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
-        return shelves.flatMap { shelf -> [MediaItem] in
-            let items = Parsing.array(shelf, "musicShelfRenderer", "contents") ?? []
-            return items.compactMap(Self.parseListItem)
+
+        let results: [MediaItem] = shelves.flatMap { shelf -> [MediaItem] in
+            // Try each known shelf shape. List-shaped shelves
+            // (musicShelfRenderer) hold rows; grid-shaped (gridRenderer) and
+            // carousel-shaped (musicCarouselShelfRenderer) hold tiles. Album
+            // results in particular sometimes come back in a card shelf.
+            if let items = Parsing.array(shelf, "musicShelfRenderer", "contents") {
+                return items.compactMap(Self.parseListItem)
+            }
+            if let items = Parsing.array(shelf, "musicCardShelfRenderer", "contents") {
+                return items.compactMap(Self.parseListItem)
+            }
+            if let items = Parsing.array(shelf, "gridRenderer", "items") {
+                return items.compactMap(Self.parseTwoRowItem)
+            }
+            if let items = Parsing.array(shelf, "musicCarouselShelfRenderer", "contents") {
+                return items.compactMap(Self.parseTwoRowItem)
+            }
+            return []
         }
+
+        #if DEBUG
+        print("[Riff search] filter=\(filter) shelves=\(shelves.count) results=\(results.count)")
+        if results.isEmpty, !shelves.isEmpty {
+            for (i, shelf) in shelves.enumerated() {
+                print("[Riff search]   shelf[\(i)] keys=\(Array(shelf.keys))")
+            }
+        }
+        #endif
+
+        return results
     }
 
     func library(section: LibraryView.Section) async throws -> [MediaItem] {
