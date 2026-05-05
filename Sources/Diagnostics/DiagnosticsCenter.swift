@@ -52,14 +52,13 @@ final class DiagnosticsCenter: NSObject {
 
 #if canImport(MetricKit)
 extension DiagnosticsCenter: @preconcurrency MXMetricManagerSubscriber {
-    /// Performance metrics — CPU, memory, disk-write — delivered ~daily.
-    /// We persist them mostly so we can correlate "app got slow yesterday"
-    /// with a specific build later.
-    nonisolated func didReceive(_ payloads: [MXMetricPayload]) {
-        for p in payloads {
-            persist(prefix: "metric", json: p.jsonRepresentation())
-        }
-    }
+    // Note: `MXMetricPayload` is iOS-only — Apple does not ship it on
+    // macOS as of the macOS 15.5 SDK (the runner image), even though
+    // `MXMetricManagerSubscriber` is available. The macOS subscriber
+    // only receives diagnostic payloads, which is fine for our use:
+    // crashes / hangs / disk-write exceptions are what we actually
+    // want to catch. CPU/memory perf metrics aren't surfaced to
+    // third-party macOS apps via this API.
 
     /// Diagnostic payloads — crashes, hangs, disk-write exceptions,
     /// CPU-exception events. The high-signal channel; this is what
