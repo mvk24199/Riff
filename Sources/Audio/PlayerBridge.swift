@@ -92,16 +92,25 @@ final class PlayerBridge {
     /// response), then navigates to /watch?v=&list= so the page builds the
     /// queue. Silently no-ops if the browse has no playable item.
     private func playByResolvingBrowseId(_ browseId: String) async {
-        guard let tuple = (try? await innerTube.playable(forBrowseId: browseId)) ?? nil else { return }
-        await navigate(watchURL(videoId: tuple.videoId, playlistId: tuple.playlistId))
+        guard let tuple = (try? await innerTube.playable(forBrowseId: browseId)) ?? nil else {
+            #if DEBUG
+            print("[Riff resolver] \(browseId) → no playable endpoint found")
+            #endif
+            return
+        }
+        let url = watchURL(videoId: tuple.videoId, playlistId: tuple.playlistId)
+        #if DEBUG
+        print("[Riff resolver] \(browseId) → v=\(tuple.videoId ?? "nil") list=\(tuple.playlistId ?? "nil") → \(url)")
+        #endif
+        await navigate(url)
     }
 
     private func watchURL(videoId: String?, playlistId: String?) -> String {
         var components = URLComponents(string: "https://music.youtube.com/watch")!
         var items: [URLQueryItem] = []
-        if let videoId { items.append(URLQueryItem(name: "v", value: videoId)) }
-        if let playlistId { items.append(URLQueryItem(name: "list", value: playlistId)) }
-        components.queryItems = items
+        if let videoId, !videoId.isEmpty { items.append(URLQueryItem(name: "v", value: videoId)) }
+        if let playlistId, !playlistId.isEmpty { items.append(URLQueryItem(name: "list", value: playlistId)) }
+        components.queryItems = items.isEmpty ? nil : items
         return components.url?.absoluteString ?? "https://music.youtube.com/"
     }
 

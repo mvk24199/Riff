@@ -95,17 +95,43 @@ final class InnerTubeClient: Sendable {
     }
 
     /// Resolve a browseId (album / podcast / artist) into a playable
-    /// `(videoId, playlistId?)` tuple. We walk the response and pick the
-    /// first `watchEndpoint` we find — for an album/podcast detail page
-    /// that's the first track of the listing; for an artist page it's the
-    /// top song. The page itself returns a queue when we navigate via
-    /// `/watch?v=<videoId>&list=<playlistId>`.
+    /// `(videoId?, playlistId?)` tuple. The page auto-plays when we
+    /// navigate to `/watch` with at least one of those set.
     ///
-    /// Returns nil when the browse response has no playable item (rare —
-    /// e.g. an artist page with no top songs).
-    func playable(forBrowseId browseId: String) async throws -> (videoId: String, playlistId: String?)? {
+    /// Strategy:
+    ///  1. Album/podcast pages expose the audio playlist via
+    ///     `microformat.microformatDataRenderer.urlCanonical` =
+    ///     `https://music.youtube.com/playlist?list=<id>`. That's the
+    ///     canonical "play this thing" pointer — most reliable.
+    ///  2. Some artist pages instead carry a `/watch?v=&list=` canonical.
+    ///  3. As a last resort, recursive watchEndpoint scan. This is fragile
+    ///     because the first match might be a sidebar suggestion rather
+    ///     than the page's primary content; we use it only when 1+2 fail.
+    func playable(forBrowseId browseId: String) async throws -> (videoId: String?, playlistId: String?)? {
         let body = try await postRaw(.browse, body: ["browseId": browseId])
-        return Self.findFirstWatchEndpoint(body)
+
+        // 1+2: microformat urlCanonical
+        if let canonical = Parsing.string(body, "microformat", "microformatDataRenderer", "urlCanonical"),
+           let url = URLComponents(string: canonical) {
+            let v = url.queryItems?.first(where: { $0.name == "v" })?.value
+            let pl = url.queryItems?.first(where: { $0.name == "list" })?.value
+            if v != nil || pl != nil {
+                return (v, pl)
+            }
+        }
+
+        // 3: recursive fallback
+        if let (vid, pid) = Self.findFirstWatchEndpoint(body) {
+            return (vid, pid)
+        }
+        return nil
+    }
+
+    /// Strip a leading "VL" — that's the YT Music convention for a
+    /// playlist *browse* ID (`VL<playlistId>`); the playable ID is the
+    /// suffix.
+    private static func unwrapVLPrefix(_ id: String) -> String {
+        id.hasPrefix("VL") ? String(id.dropFirst(2)) : id
     }
 
     private static func findFirstWatchEndpoint(_ root: Any?) -> (String, String?)? {
@@ -206,11 +232,11 @@ final class InnerTubeClient: Sendable {
             case "MUSIC_PAGE_TYPE_ALBUM":             return (browseId, .album)
             case "MUSIC_PAGE_TYPE_ARTIST":            return (browseId, .artist)
             case "MUSIC_PAGE_TYPE_PODCAST_SHOW_DETAIL_PAGE": return (browseId, .podcast)
-            case "MUSIC_PAGE_TYPE_PLAYLIST":          return (browseId, .playlist)
+            case "MUSIC_PAGE_TYPE_PLAYLIST":          return (Self.unwrapVLPrefix(browseId), .playlist)
             default:
                 if browseId.hasPrefix("MPRE") { return (browseId, .album) }   // album browseId pattern
                 if browseId.hasPrefix("UC") || browseId.hasPrefix("UCMO") { return (browseId, .artist) }
-                if browseId.hasPrefix("VL") || browseId.hasPrefix("PL") { return (browseId, .playlist) }
+                if browseId.hasPrefix("VL") || browseId.hasPrefix("PL") { return (Self.unwrapVLPrefix(browseId), .playlist) }
                 return nil
             }
         }
