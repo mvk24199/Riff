@@ -23,6 +23,15 @@ final class InnerTubeClient: Sendable {
     static let clientVersion = "1.20260501.00.00"
     static let clientNameID = "67"  // X-YouTube-Client-Name for WEB_REMIX
 
+    /// When we attach a Bearer token from Device Flow, the audience of that
+    /// token is the YouTube TV client (`861556708454-...`) — InnerTube
+    /// rejects `WEB_REMIX + Bearer` as INVALID_ARGUMENT because the
+    /// clientName doesn't match the token's origin. Switching to the TV
+    /// client identifiers lets InnerTube accept the combination.
+    static let tvClientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
+    static let tvClientVersion = "2.0"
+    static let tvClientNameID = "85"
+
     /// Pretend to be Chrome on macOS. YouTube Music gates its web app
     /// (and several InnerTube endpoints) to Chrome — Safari/WebKit gets a
     /// "not optimized for your browser" interstitial. We use the same UA
@@ -89,28 +98,42 @@ final class InnerTubeClient: Sendable {
         return results
     }
 
-    /// Library contents. Routes to the YouTube Data API v3 (over Bearer
-    /// auth) instead of InnerTube — Google's edge rejects InnerTube body
-    /// shape when an OAuth Bearer is attached, so we use the public
-    /// REST API which speaks Bearer natively. Albums/podcasts aren't
-    /// surfaced by Data API v3, so those sections return empty for now.
+    /// Library contents — routes through InnerTube `/browse` with the
+    /// section-specific browseId. Auth comes from the Bearer token
+    /// (Device Flow) when present; postRaw automatically switches to TV
+    /// client identifiers in that case so InnerTube accepts the
+    /// Bearer / clientName pair.
     func library(section: LibraryView.Section) async throws -> [MediaItem] {
-        Log.innertube.debug("library section=\(String(describing: section), privacy: .public)")
-        let items: [MediaItem]
+        let browseId: String
         switch section {
-        case .liked:
-            items = try await likedVideos()
-        case .playlists:
-            items = try await myPlaylists()
-        case .artists:
-            items = try await mySubscriptions()
-        case .albums, .podcasts:
-            // Data API v3 doesn't expose YT Music albums/podcasts as a list.
-            // Return empty until we add an InnerTube-via-cookies path.
-            items = []
+        case .liked:     browseId = BrowseID.likedSongs
+        case .playlists: browseId = BrowseID.likedPlaylists
+        case .albums:    browseId = BrowseID.libraryAlbums
+        case .artists:   browseId = BrowseID.libraryArtists
+        case .podcasts:  browseId = BrowseID.libraryPodcasts
         }
-        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) results=\(items.count)")
-        return items
+        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) browseId=\(browseId, privacy: .public)")
+        let body = try await postRaw(.browse, body: ["browseId": browseId])
+        let shelves = Parsing.array(body, "contents",
+            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        let results = shelves.flatMap { shelf -> [MediaItem] in
+            if let items = Parsing.array(shelf, "musicShelfRenderer", "contents") {
+                return items.compactMap(Self.parseListItem)
+            }
+            if let items = Parsing.array(shelf, "gridRenderer", "items") {
+                return items.compactMap(Self.parseTwoRowItem)
+            }
+            if let items = Parsing.array(shelf, "musicCarouselShelfRenderer", "contents") {
+                return items.compactMap(Self.parseTwoRowItem)
+            }
+            return []
+        }
+        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) shelves=\(shelves.count) results=\(results.count)")
+        if results.isEmpty, !shelves.isEmpty {
+            Log.innertube.debug("  library empty: shelf[0] keys=\(Array(shelves[0].keys), privacy: .public)")
+        }
+        return results
     }
 
     // MARK: - YouTube Data API v3 (Bearer auth, googleapis.com)
@@ -372,37 +395,56 @@ final class InnerTubeClient: Sendable {
     // MARK: - Request plumbing
 
     private func postRaw(_ endpoint: Endpoint, body: [String: Any]) async throws -> [String: Any] {
+        // Decide auth mode + matching client identity. Bearer tokens carry
+        // the TV-app audience; the InnerTube backend rejects WEB_REMIX +
+        // Bearer with INVALID_ARGUMENT, so we have to claim TV when Bearer
+        // is set. Anonymous and cookie-based calls stick with WEB_REMIX.
+        let bearer = await Self.bearerAuthHeader()
+        let authMode: String
+        let clientName: String
+        let clientVersion: String
+        let clientNameID: String
+        if let bearer {
+            authMode = "bearer"
+            clientName = Self.tvClientName
+            clientVersion = Self.tvClientVersion
+            clientNameID = Self.tvClientNameID
+            _ = bearer  // used below
+        } else if Self.sapisidHashAuthHeader() != nil {
+            authMode = "sapisid"
+            clientName = Self.clientName
+            clientVersion = Self.clientVersion
+            clientNameID = Self.clientNameID
+        } else {
+            authMode = "anonymous"
+            clientName = Self.clientName
+            clientVersion = Self.clientVersion
+            clientNameID = Self.clientNameID
+        }
+
         var req = URLRequest(url: Self.baseURL.appendingPathComponent(endpoint.rawValue))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(Self.origin, forHTTPHeaderField: "Origin")
         req.setValue("\(Self.origin)/", forHTTPHeaderField: "Referer")
         req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        req.setValue(Self.clientNameID, forHTTPHeaderField: "X-YouTube-Client-Name")
-        req.setValue(Self.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        req.setValue(clientNameID, forHTTPHeaderField: "X-YouTube-Client-Name")
+        req.setValue(clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         req.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
 
-        // Prefer the OAuth bearer token (Device Flow path) when available;
-        // fall back to SAPISIDHASH cookies if the user signed in via the
-        // (mostly broken) embedded WebView. Anonymous calls have neither
-        // and Google still serves browse/search.
-        let authMode: String
-        if let bearer = await Self.bearerAuthHeader() {
+        if let bearer {
             req.setValue(bearer, forHTTPHeaderField: "Authorization")
-            authMode = "bearer"
         } else if let auth = Self.sapisidHashAuthHeader() {
             req.setValue(auth, forHTTPHeaderField: "Authorization")
-            authMode = "sapisid"
-        } else {
-            authMode = "anonymous"
         }
-        Log.innertube.debug("→ \(endpoint.rawValue, privacy: .public) auth=\(authMode, privacy: .public)")
+
+        Log.innertube.debug("→ \(endpoint.rawValue, privacy: .public) auth=\(authMode, privacy: .public) client=\(clientName, privacy: .public)")
 
         var payload = body
         payload["context"] = [
             "client": [
-                "clientName": Self.clientName,
-                "clientVersion": Self.clientVersion,
+                "clientName": clientName,
+                "clientVersion": clientVersion,
                 "hl": Locale.current.language.languageCode?.identifier ?? "en",
                 "gl": Locale.current.region?.identifier ?? "US",
             ],
