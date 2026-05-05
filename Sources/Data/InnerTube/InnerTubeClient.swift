@@ -101,8 +101,10 @@ final class InnerTubeClient: Sendable {
 
     /// Library contents — InnerTube `/browse` with the section-specific
     /// browseId. Auth comes from the SAPISID cookie set by the WebView
-    /// sign-in (Kaset's pattern); without it the response is anonymous
-    /// and library sections come back empty.
+    /// sign-in (Kaset's pattern). Walks the response with a deep scanner
+    /// because signed-in library responses wrap shelves in
+    /// `itemSectionRenderer` while anonymous browse uses
+    /// `musicShelfRenderer` / `musicCarouselShelfRenderer` directly.
     func library(section: LibraryView.Section) async throws -> [MediaItem] {
         let browseId: String
         switch section {
@@ -114,26 +116,37 @@ final class InnerTubeClient: Sendable {
         }
         Log.innertube.debug("library section=\(String(describing: section), privacy: .public) browseId=\(browseId, privacy: .public)")
         let body = try await postRaw(.browse, body: ["browseId": browseId])
-        let shelves = Parsing.array(body, "contents",
-            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
-            "content", "sectionListRenderer", "contents") ?? []
-        let results = shelves.flatMap { shelf -> [MediaItem] in
-            if let items = Parsing.array(shelf, "musicShelfRenderer", "contents") {
-                return items.compactMap(Self.parseListItem)
-            }
-            if let items = Parsing.array(shelf, "gridRenderer", "items") {
-                return items.compactMap(Self.parseTwoRowItem)
-            }
-            if let items = Parsing.array(shelf, "musicCarouselShelfRenderer", "contents") {
-                return items.compactMap(Self.parseTwoRowItem)
-            }
-            return []
-        }
-        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) shelves=\(shelves.count) results=\(results.count)")
-        if results.isEmpty, !shelves.isEmpty {
-            Log.innertube.debug("  library empty: shelf[0] keys=\(Array(shelves[0].keys), privacy: .public)")
-        }
+        let results = Self.scanForMediaItems(body)
+        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) results=\(results.count)")
         return results
+    }
+
+    /// Deep-walk a response tree pulling any `musicResponsiveListItemRenderer`
+    /// or `musicTwoRowItemRenderer` we encounter. Used for library responses
+    /// where the shelf shape varies (itemSectionRenderer wrapping
+    /// musicShelfRenderer, gridRenderer, etc.) and we don't want to enumerate
+    /// every wrapper combination by hand.
+    private static func scanForMediaItems(_ root: Any?) -> [MediaItem] {
+        var out: [MediaItem] = []
+        func walk(_ node: Any?) {
+            if let dict = node as? [String: Any] {
+                if dict["musicResponsiveListItemRenderer"] != nil,
+                   let item = parseListItem(dict) {
+                    out.append(item)
+                    return  // don't recurse into a known item — its kids are columns/menus, not more items
+                }
+                if dict["musicTwoRowItemRenderer"] != nil,
+                   let item = parseTwoRowItem(dict) {
+                    out.append(item)
+                    return
+                }
+                for (_, v) in dict { walk(v) }
+            } else if let arr = node as? [Any] {
+                for v in arr { walk(v) }
+            }
+        }
+        walk(root)
+        return out
     }
 
     // MARK: - YouTube Data API v3 (Bearer auth, googleapis.com)
