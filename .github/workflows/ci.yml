@@ -6,9 +6,12 @@
 #   2. `xcodebuild build` against macOS — surfaces compile errors.
 #   3. `xcodebuild test` runs the parser + queue + resolver suites.
 #
-# Runs on macos-14 because Riff targets macOS 14 (Sonoma) and the SDK
-# needs to match. Apple bumps the available runner image periodically;
-# bump the `runs-on` line when a newer LTS lands.
+# Runner: macos-15 because we need Xcode 16+ on it. XcodeGen's modern
+# default writes pbxproj objectVersion 77, which Xcode 15.x can't read
+# (the macos-14 runner default Xcode is 15.4 → "future Xcode project
+# file format (77)"). macos-15 ships with Xcode 16 lines pre-installed.
+# We additionally pin Xcode via setup-xcode so a runner-image version
+# bump doesn't silently change toolchains under us.
 
 name: CI
 
@@ -20,8 +23,8 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: macos-14
-    timeout-minutes: 15
+    runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -30,6 +33,15 @@ jobs:
           # (`git rev-list --count HEAD` in project.yml) gets a real
           # number rather than 1.
           fetch-depth: 0
+
+      - name: Select Xcode 16.x
+        # Pin the toolchain. The "16" wildcard picks the latest 16.x
+        # the runner image has installed; if the runner image only
+        # ships 15.x this step fails loudly rather than silently
+        # falling back to an incompatible Xcode.
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16"
 
       - name: Show toolchain versions
         run: |
