@@ -322,8 +322,12 @@ final class InnerTubeClient: Sendable {
 
         let (data, response) = try await session.data(for: req)
         if let http = response as? HTTPURLResponse {
-            if http.statusCode == 401 || http.statusCode == 403 { throw InnerTubeError.needsReauth }
-            guard (200..<300).contains(http.statusCode) else { throw InnerTubeError.http(http.statusCode) }
+            if !(200..<300).contains(http.statusCode) {
+                let preview = String(data: data, encoding: .utf8)?.prefix(400) ?? ""
+                Log.innertube.error("← \(endpoint.rawValue, privacy: .public) status=\(http.statusCode) auth=\(authMode, privacy: .public) body=\(preview, privacy: .public)")
+                if http.statusCode == 401 || http.statusCode == 403 { throw InnerTubeError.needsReauth }
+                throw InnerTubeError.http(http.statusCode)
+            }
         }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw InnerTubeError.decoding
