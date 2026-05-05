@@ -30,71 +30,55 @@ struct NowPlayingView: View {
 
     var body: some View {
         let track = env.player.currentTrack
-        ZStack {
-            // Solid black base so the underlying tab content can never bleed through.
-            Color.black.ignoresSafeArea()
-
-            // Hero blurred backdrop fed by the artwork.
-            AsyncImage(url: track?.thumbnailURL) { phase in
-                if case .success(let img) = phase {
-                    img.resizable().scaledToFill().blur(radius: 80).opacity(0.45)
-                } else {
-                    LinearGradient(colors: [Color(white: 0.08), .black],
-                                   startPoint: .top, endPoint: .bottom)
-                }
-            }
-            .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [Color.black.opacity(0.45), Color.black.opacity(0.78)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            // Side-pane layout. The earlier failure mode (topBar and pane
-            // invisible in fullscreen) was caused by the HStack's natural
-            // height: leftPlayer + sidePane content has a fixed intrinsic
-            // height (~600pt). Without an explicit maxHeight on the
-            // HStack, the parent VStack sized itself to topBar+HStack
-            // intrinsic = ~660pt and got centered in the fullscreen
-            // window — pushing topBar off the top and the right edge
-            // (and the pane) inward toward the centered VStack's bounds
-            // rather than the window's bounds. Forcing the HStack to
-            // .frame(maxHeight:.infinity) makes it (and therefore the
-            // parent VStack) span the full window height, so topBar
-            // lands at the top and the pane lands at the actual right
-            // edge.
-            VStack(spacing: 0) {
-                topBar
-                HStack(alignment: .top, spacing: 16) {
-                    leftPlayer
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    sidePane
-                        .frame(width: 380)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+        // Foreground content only — backdrops are .background modifiers
+        // outside this VStack so they can ignoresSafeArea independently
+        // without inflating the foreground's frame.
+        VStack(spacing: 0) {
+            topBar
+            HStack(alignment: .top, spacing: 16) {
+                leftPlayer
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                sidePane
+                    .frame(width: 380)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Runtime size probe — tells us what frame SwiftUI actually
-            // assigned NowPlayingView. If width is much less than the
-            // actual window/screen width in fullscreen, the parent (RootView)
-            // is constraining the frame and that's where the bug lives.
-            .background(
-                GeometryReader { geo in
-                    Color.clear.onAppear {
-                        Log.bridge.debug("[NowPlayingView geom] size=\(geo.size.width, format: .fixed(precision: 0))x\(geo.size.height, format: .fixed(precision: 0))")
-                    }
-                    .onChange(of: geo.size) { _, newSize in
-                        Log.bridge.debug("[NowPlayingView geom] resize=\(newSize.width, format: .fixed(precision: 0))x\(newSize.height, format: .fixed(precision: 0))")
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            GeometryReader { geo in
+                Color.clear.onAppear {
+                    Log.bridge.debug("[NowPlayingView geom] size=\(geo.size.width, format: .fixed(precision: 0))x\(geo.size.height, format: .fixed(precision: 0))")
+                }
+                .onChange(of: geo.size) { _, newSize in
+                    Log.bridge.debug("[NowPlayingView geom] resize=\(newSize.width, format: .fixed(precision: 0))x\(newSize.height, format: .fixed(precision: 0))")
+                }
+            }
+        )
+        .background {
+            // Backdrops as a background stack — entirely behind the
+            // foreground; their sizes have no effect on the foreground's
+            // layout. ZStack here is fine because it has no influence on
+            // the VStack above.
+            ZStack {
+                Color.black
+                AsyncImage(url: track?.thumbnailURL) { phase in
+                    if case .success(let img) = phase {
+                        img.resizable().scaledToFill().blur(radius: 80).opacity(0.45)
+                    } else {
+                        LinearGradient(colors: [Color(white: 0.08), .black],
+                                       startPoint: .top, endPoint: .bottom)
                     }
                 }
-            )
+                LinearGradient(
+                    colors: [Color.black.opacity(0.45), Color.black.opacity(0.78)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+            .ignoresSafeArea()
         }
         .preferredColorScheme(.dark)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
         .onExitCommand { env.player.isFullPlayerOpen = false }
         .onChange(of: bottomTab) { _, newTab in
             if newTab == .lyrics { env.player.loadLyricsIfNeeded() }
