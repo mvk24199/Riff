@@ -190,14 +190,24 @@ struct NowPlayingView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Solid panel — was getting lost against the dark backdrop, so
-        // bumping the surface lighter and adding a clear stroked border.
-        .background(Color(white: 0.16))
+        // .regularMaterial = macOS native frosted-glass surface. Reads as
+        // a clearly distinct panel against the dark blurred backdrop —
+        // previous solid Color(white: 0.16) blended in too much. The
+        // brand-red top edge is an unmistakable visual landmark.
+        .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Theme.red)
+                .frame(height: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 1.5))
+                .padding(.horizontal, 16)
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.5), radius: 16, x: -4, y: 0)
         .padding(.leading, 16)  // visual gap from the player on the left
     }
 
