@@ -59,6 +59,24 @@ final class PlayerBridge {
         await navigate(watchURL(videoId: videoId, playlistId: nil))
     }
 
+    /// Click-to-play with an item we already have full metadata for (search
+    /// rows, home carousels, library lists). Pre-populates `currentTrack`
+    /// so the mini-bar shows the right title/artist/artwork *immediately*,
+    /// before the WebView even starts loading. Without this, anonymous YT
+    /// Music plays 2-3 video ads first and the mini-bar flickers through
+    /// each ad's metadata before settling on the real song.
+    func play(item: MediaItem) async {
+        currentTrack = Track(
+            videoId: item.id,
+            title: item.title,
+            subtitle: item.subtitle,
+            thumbnailURL: item.thumbnailURL,
+            duration: 0
+        )
+        onUpdate?()
+        await play(videoId: item.id)
+    }
+
     /// Plays a known YT Music playlist (regular playlists where `id` is the
     /// playlistId itself). For album/podcast/artist tiles, see the resolver
     /// variants below.
@@ -129,10 +147,31 @@ final class PlayerBridge {
             elapsed = t
             duration = d
         case .trackChanged(let id, let title, let artist, let art):
-            currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
-            Task { [innerTube, weak self] in
-                let queue = (try? await innerTube.nextQueue(videoId: id, playlistId: nil)) ?? []
-                await MainActor.run { self?.upNext = queue }
+            // YT Music plays 2-3 video ads before each track for anonymous
+            // sessions. Each ad fires trackChanged with its own metadata,
+            // but the URL videoId stays at the song the user clicked.
+            // Ignore events that match the videoId we already have — we
+            // trust the MediaItem-derived metadata over the ad's. Only
+            // adopt the JS-side metadata when the videoId actually changes
+            // (autoplay advance).
+            if currentTrack?.videoId == id {
+                // Same track; refresh duration if we now have it but skip
+                // title/artist/artwork churn.
+                if duration > 0, let existing = currentTrack, existing.duration == 0 {
+                    currentTrack = Track(
+                        videoId: existing.videoId,
+                        title: existing.title,
+                        subtitle: existing.subtitle,
+                        thumbnailURL: existing.thumbnailURL,
+                        duration: duration
+                    )
+                }
+            } else {
+                currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
+                Task { [innerTube, weak self] in
+                    let queue = (try? await innerTube.nextQueue(videoId: id, playlistId: nil)) ?? []
+                    await MainActor.run { self?.upNext = queue }
+                }
             }
         }
         onUpdate?()

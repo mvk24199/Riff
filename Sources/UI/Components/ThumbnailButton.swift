@@ -48,12 +48,11 @@ struct ThumbnailButton: View {
 
     private func play() async {
         switch item.kind {
-        case .song:     await env.player.play(videoId: item.id)
-        case .album:    await env.player.playAlbum(id: item.id)
-        case .playlist: await env.player.playPlaylist(id: item.id)
-        case .artist:   await env.player.playArtistRadio(id: item.id)
-        case .podcast:  await env.player.playPodcast(id: item.id)
-        case .episode:  await env.player.play(videoId: item.id)
+        case .song, .episode: await env.player.play(item: item)
+        case .album:          await env.player.playAlbum(id: item.id)
+        case .playlist:       await env.player.playPlaylist(id: item.id)
+        case .artist:         await env.player.playArtistRadio(id: item.id)
+        case .podcast:        await env.player.playPodcast(id: item.id)
         }
     }
 }
