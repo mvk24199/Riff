@@ -440,7 +440,34 @@ final class InnerTubeClient: Sendable {
             playablePlaylistId = comps.queryItems?.first(where: { $0.name == "list" })?.value
         }
 
-        let tracks = Self.scanForMediaItems(body)
+        // Tracks live in the FIRST list-style shelf inside the section
+        // list (musicShelfRenderer for albums, musicPlaylistShelfRenderer
+        // for playlists). Anything after that is "More from artist" /
+        // "You might also like" carousels which we deliberately exclude
+        // from the tracklist — they're recommendations, not part of the
+        // entity the user opened.
+        let sectionContents = Parsing.array(body, "contents",
+            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        var tracks: [MediaItem] = []
+        for shelf in sectionContents {
+            if let r = shelf["musicShelfRenderer"] as? [String: Any],
+               let contents = r["contents"] as? [[String: Any]] {
+                tracks = contents.compactMap(Self.parseListItem)
+                break
+            }
+            if let r = shelf["musicPlaylistShelfRenderer"] as? [String: Any],
+               let contents = r["contents"] as? [[String: Any]] {
+                tracks = contents.compactMap(Self.parseListItem)
+                break
+            }
+        }
+        // Final fallback: if no recognised shelf was found at the top
+        // level (e.g. an unusual layout), deep-scan but only as a
+        // last resort.
+        if tracks.isEmpty {
+            tracks = Self.scanForMediaItems(body)
+        }
         return DetailPage(
             title: title,
             subtitle: subtitle,
