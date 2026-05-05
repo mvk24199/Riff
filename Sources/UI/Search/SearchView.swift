@@ -27,6 +27,10 @@ struct SearchView: View {
     }
 
     var body: some View {
+        NavigationStack { searchContent }
+    }
+
+    private var searchContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             TextField("Search", text: $query)
                 .textFieldStyle(.roundedBorder)
@@ -59,6 +63,7 @@ struct SearchView: View {
         .task(id: SearchInput(query: query, filter: filter)) {
             await debouncedRunSearch()
         }
+        .navigationDestination(for: MediaItem.self) { DetailView(item: $0) }
     }
 
     private struct SearchInput: Hashable {

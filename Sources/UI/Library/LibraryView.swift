@@ -6,15 +6,20 @@ struct LibraryView: View {
     @State private var items: [MediaItem] = []
 
     enum Section: String, CaseIterable, Identifiable {
-        case liked = "Liked", playlists = "Playlists", podcasts = "Podcasts", albums = "Albums", artists = "Artists"
+        case liked = "Liked", playlists = "Playlists", albums = "Albums", artists = "Artists", podcasts = "Podcasts", history = "History"
         var id: String { rawValue }
     }
 
     var body: some View {
-        if env.isSignedIn {
-            signedInView
-        } else {
-            anonymousEmptyState
+        NavigationStack {
+            Group {
+                if env.isSignedIn {
+                    signedInView
+                } else {
+                    anonymousEmptyState
+                }
+            }
+            .navigationDestination(for: MediaItem.self) { DetailView(item: $0) }
         }
     }
 

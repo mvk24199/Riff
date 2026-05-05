@@ -158,8 +158,14 @@ struct NowPlayingView: View {
     }
 
     private var playbackControls: some View {
-        HStack(spacing: 28) {
-            controlButton(systemName: "shuffle", size: 18, tint: .white.opacity(0.6)) { }
+        HStack(spacing: 24) {
+            controlButton(
+                systemName: env.player.liked ? "heart.fill" : "heart",
+                size: 20,
+                tint: env.player.liked ? Theme.red : .white.opacity(0.7)
+            ) {
+                Task { await env.player.toggleLike() }
+            }
             controlButton(systemName: "backward.fill", size: 24, tint: .white) {
                 Task { await env.player.previous() }
             }
@@ -176,7 +182,7 @@ struct NowPlayingView: View {
             controlButton(systemName: "forward.fill", size: 24, tint: .white) {
                 Task { await env.player.next() }
             }
-            controlButton(systemName: "repeat", size: 18, tint: .white.opacity(0.6)) { }
+            controlButton(systemName: "shuffle", size: 18, tint: .white.opacity(0.6)) { }
         }
     }
 

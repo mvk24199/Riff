@@ -6,20 +6,23 @@ struct HomeView: View {
     @State private var loading = true
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 32) {
-                if loading && sections.isEmpty {
-                    HomeSkeleton()
-                } else {
-                    ForEach(sections) { section in
-                        HomeSectionRow(section: section)
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 32) {
+                    if loading && sections.isEmpty {
+                        HomeSkeleton()
+                    } else {
+                        ForEach(sections) { section in
+                            HomeSectionRow(section: section)
+                        }
                     }
                 }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
+            .navigationDestination(for: MediaItem.self) { DetailView(item: $0) }
+            .task { await load() }
         }
-        .task { await load() }
     }
 
     private func load() async {

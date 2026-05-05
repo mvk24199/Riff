@@ -113,6 +113,7 @@ final class InnerTubeClient: Sendable {
         case .albums:    browseId = BrowseID.libraryAlbums
         case .artists:   browseId = BrowseID.libraryArtists
         case .podcasts:  browseId = BrowseID.libraryPodcasts
+        case .history:   browseId = BrowseID.history
         }
         Log.innertube.debug("library section=\(String(describing: section), privacy: .public) browseId=\(browseId, privacy: .public)")
         let body = try await postRaw(.browse, body: ["browseId": browseId])
@@ -310,11 +311,19 @@ final class InnerTubeClient: Sendable {
     }
 
     /// Result of `/next`: queued tracks + browseIds for the lyrics and
-    /// related-songs tabs (which we fetch separately on demand).
+    /// related-songs tabs (which we fetch separately on demand) + the
+    /// initial like state for the playing video.
     struct NextResponse: Sendable {
         let queue: [MediaItem]
         let lyricsBrowseId: String?
         let relatedBrowseId: String?
+        let likeStatus: LikeStatus
+    }
+
+    enum LikeStatus: String, Sendable {
+        case like = "LIKE"
+        case dislike = "DISLIKE"
+        case indifferent = "INDIFFERENT"
     }
 
     func nextQueue(videoId: String, playlistId: String?) async throws -> NextResponse {
@@ -352,7 +361,19 @@ final class InnerTubeClient: Sendable {
             if title.contains("lyric"), browseId != nil { lyricsId = browseId }
             else if title.contains("related"), browseId != nil { relatedId = browseId }
         }
-        return NextResponse(queue: queue, lyricsBrowseId: lyricsId, relatedBrowseId: relatedId)
+        // likeStatus lives on the playerOverlays' likeButtonRenderer.
+        // Path: playerOverlays.playerOverlayRenderer.actions[].likeButtonRenderer.likeStatus
+        var likeStatus: LikeStatus = .indifferent
+        let actions = Parsing.array(body, "playerOverlays", "playerOverlayRenderer", "actions") ?? []
+        for action in actions {
+            if let renderer = action["likeButtonRenderer"] as? [String: Any],
+               let status = renderer["likeStatus"] as? String,
+               let parsed = LikeStatus(rawValue: status) {
+                likeStatus = parsed
+                break
+            }
+        }
+        return NextResponse(queue: queue, lyricsBrowseId: lyricsId, relatedBrowseId: relatedId, likeStatus: likeStatus)
     }
 
     /// Fetch the lyrics text for a given lyrics browseId (extracted from
@@ -375,6 +396,75 @@ final class InnerTubeClient: Sendable {
     func related(browseId: String) async throws -> [MediaItem] {
         let body = try await postRaw(.browse, body: ["browseId": browseId])
         return Self.scanForMediaItems(body)
+    }
+
+    /// Detail page for an album / playlist / podcast — header info plus
+    /// tracklist. Same `/browse` endpoint with the corresponding browseId.
+    /// `playlistId` (when known) is the playable playlist for the whole
+    /// thing; the user can hit Play and we navigate /watch?list=<id>.
+    struct DetailPage: Sendable {
+        let title: String
+        let subtitle: String
+        let artworkURL: URL?
+        /// For albums/playlists: navigate /watch?list=<this> to play the
+        /// whole thing. nil when not applicable (artist pages).
+        let playablePlaylistId: String?
+        let tracks: [MediaItem]
+    }
+
+    func detail(forBrowseId browseId: String) async throws -> DetailPage {
+        let body = try await postRaw(.browse, body: ["browseId": browseId])
+
+        // Header lives at one of:
+        //   header.musicDetailHeaderRenderer (older)
+        //   header.musicResponsiveHeaderRenderer (newer)
+        //   header.musicImmersiveHeaderRenderer (artist pages)
+        let header: [String: Any]? =
+            (Parsing.dig(body, ["header", "musicDetailHeaderRenderer"]) as? [String: Any])
+            ?? (Parsing.dig(body, ["header", "musicResponsiveHeaderRenderer"]) as? [String: Any])
+            ?? (Parsing.dig(body, ["header", "musicImmersiveHeaderRenderer"]) as? [String: Any])
+
+        let title = Parsing.runs(header, "title") ?? ""
+        let subtitle = Parsing.runs(header, "subtitle") ?? Parsing.runs(header, "straplineTextOne") ?? ""
+        let artworkContainer: [String: Any]? =
+            (Parsing.dig(header, ["thumbnail", "croppedSquareThumbnailRenderer", "thumbnail"]) as? [String: Any])
+            ?? (Parsing.dig(header, ["thumbnail", "musicThumbnailRenderer", "thumbnail"]) as? [String: Any])
+        let artwork = Parsing.thumbnailURL(artworkContainer)
+
+        // urlCanonical → /playlist?list=<id> for albums, /channel/<id> for artists.
+        var playablePlaylistId: String?
+        if let canonical = Parsing.string(body, "microformat", "microformatDataRenderer", "urlCanonical"),
+           let comps = URLComponents(string: canonical) {
+            playablePlaylistId = comps.queryItems?.first(where: { $0.name == "list" })?.value
+        }
+
+        let tracks = Self.scanForMediaItems(body)
+        return DetailPage(
+            title: title,
+            subtitle: subtitle,
+            artworkURL: artwork,
+            playablePlaylistId: playablePlaylistId,
+            tracks: tracks
+        )
+    }
+
+    /// Detail for a YT Music playlist (just delegates — playlist browseIds
+    /// are typically `VL<playlistId>`; the caller should already have
+    /// VL-stripped if needed).
+    func playlistDetail(playlistId: String) async throws -> DetailPage {
+        // Playlist browseId is "VL" + playlistId.
+        try await detail(forBrowseId: "VL" + playlistId)
+    }
+
+    /// Like the given video. Requires SAPISID cookie auth — anonymous calls
+    /// throw `needsReauth`.
+    func like(videoId: String) async throws {
+        _ = try await postRaw(.like, body: ["target": ["videoId": videoId]])
+    }
+
+    /// Remove a previously-set like.
+    func removeLike(videoId: String) async throws {
+        _ = try await postRaw(.removeLike, body: ["target": ["videoId": videoId]])
     }
 
     // MARK: - Parse helpers (private)

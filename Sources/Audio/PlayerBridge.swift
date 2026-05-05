@@ -16,6 +16,7 @@ final class PlayerBridge {
     private(set) var related: [MediaItem] = []
     private(set) var lyrics: String? = nil
     private(set) var lyricsLoading: Bool = false
+    private(set) var liked: Bool = false
     /// Whether the full-screen Now Playing view is presented.
     var isFullPlayerOpen: Bool = false
     var hasTrack: Bool { currentTrack != nil }
@@ -101,10 +102,29 @@ final class PlayerBridge {
                 self?.upNext = response.queue
                 self?.lyricsBrowseId = response.lyricsBrowseId
                 self?.relatedBrowseId = response.relatedBrowseId
+                self?.liked = response.likeStatus == .like
                 // Invalidate previously cached tab content for the old track.
                 self?.lyrics = nil
                 self?.related = []
             }
+        }
+    }
+
+    /// Toggle the like state on the current track. Optimistically updates
+    /// `liked` so the UI feels immediate; rolls back on InnerTube error.
+    func toggleLike() async {
+        guard let track = currentTrack else { return }
+        let wasLiked = liked
+        liked.toggle()
+        do {
+            if wasLiked {
+                try await innerTube.removeLike(videoId: track.videoId)
+            } else {
+                try await innerTube.like(videoId: track.videoId)
+            }
+        } catch {
+            // Roll back on failure (e.g. needsReauth when not signed in).
+            liked = wasLiked
         }
     }
 
