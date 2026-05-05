@@ -106,6 +106,7 @@ final class OAuthDeviceFlow {
 
     private struct ErrorResponse: Decodable {
         let error: String
+        let error_description: String?
     }
 
     private struct RefreshResponse: Decodable {
@@ -122,11 +123,23 @@ final class OAuthDeviceFlow {
             "scope": Self.scope,
         ])
         let (data, response) = try await URLSession.shared.data(for: req)
-        #if DEBUG
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+        #if DEBUG
+        let preview = String(data: data, encoding: .utf8) ?? ""
         print("[Riff oauth] device/code status=\(status) body=\(preview)")
         #endif
+
+        if status != 200 {
+            if let err = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
+                let desc = err.error_description.map { ": \($0)" } ?? ""
+                throw NSError(
+                    domain: "OAuthDeviceFlow", code: status,
+                    userInfo: [NSLocalizedDescriptionKey: "Google returned \(err.error)\(desc)"]
+                )
+            }
+            throw NSError(domain: "OAuthDeviceFlow", code: status,
+                          userInfo: [NSLocalizedDescriptionKey: "Google returned status \(status)"])
+        }
         return try JSONDecoder().decode(DeviceCodeResponse.self, from: data)
     }
 
@@ -194,7 +207,8 @@ final class OAuthDeviceFlow {
                     state = .failure("Code expired. Please try again.")
                     return
                 default:
-                    state = .failure("Google returned: \(err.error)")
+                    let desc = err.error_description.map { ": \($0)" } ?? ""
+                    state = .failure("Google returned \(err.error)\(desc)")
                     return
                 }
             }
@@ -224,9 +238,15 @@ final class OAuthDeviceFlow {
 }
 
 private func formEncode(_ pairs: [String: String]) -> Data {
+    // RFC 3986 unreserved set. Stricter than `.urlQueryAllowed` (which keeps
+    // `:`, `/`, `@`, etc. unescaped) — those characters must be encoded in
+    // form bodies. Google's device/code endpoint rejects loose encoding
+    // with `invalid_request`.
+    var allowed = CharacterSet.alphanumerics
+    allowed.insert(charactersIn: "-._~")
     let encoded = pairs.map { k, v in
-        let ke = k.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? k
-        let ve = v.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? v
+        let ke = k.addingPercentEncoding(withAllowedCharacters: allowed) ?? k
+        let ve = v.addingPercentEncoding(withAllowedCharacters: allowed) ?? v
         return "\(ke)=\(ve)"
     }.joined(separator: "&")
     return Data(encoded.utf8)
