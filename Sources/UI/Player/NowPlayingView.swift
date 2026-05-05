@@ -54,27 +54,24 @@ struct NowPlayingView: View {
             VStack(spacing: 0) {
                 topBar
 
-                // ZStack-anchored layout instead of HStack distribution.
-                // HStack let the side pane get squeezed off-screen when
-                // SwiftUI couldn't reconcile leftPlayer's flexible
-                // maxWidth with macOS fullscreen window sizing. ZStack
-                // with .topTrailing pins the pane absolutely on the right;
-                // the player is laid out independently with trailing
-                // padding equal to the pane width + visual gap so its
-                // content centers in the remaining space.
-                ZStack(alignment: .topTrailing) {
-                    leftPlayer
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.trailing, 380 + 16 + 24)  // pane width + gap + outer pad
-                        .padding(.leading, 24)
-                        .padding(.bottom, 24)
-                    sidePane
-                        .frame(width: 380)
-                        .padding(.trailing, 24)
-                        .padding(.bottom, 24)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Use .overlay rather than ZStack alignment so the side
+                // pane is anchored to the LEFT-PLAYER's bounding box. In
+                // fullscreen the prior ZStack was leaving the pane in some
+                // unexpected layout state and it never showed. Overlay's
+                // alignment is rock-solid against any window size.
+                leftPlayer
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.leading, 24)
+                    .padding(.trailing, 380 + 16 + 24)
+                    .padding(.bottom, 24)
+                    .overlay(alignment: .topTrailing) {
+                        sidePane
+                            .frame(width: 380)
+                            .padding(.trailing, 24)
+                            .padding(.bottom, 24)
+                    }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
