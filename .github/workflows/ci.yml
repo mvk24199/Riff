@@ -27,7 +27,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        # v5+ runs on Node.js 24; v4 runs on Node.js 20 which Actions
+        # is forcing off in mid-2026.
+        uses: actions/checkout@v5
         with:
           # Full history so the CFBundleVersion stamp script
           # (`git rev-list --count HEAD` in project.yml) gets a real
