@@ -30,7 +30,7 @@ struct NowPlayingView: View {
 
     var body: some View {
         let track = env.player.currentTrack
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             // Solid black base so the underlying tab content can never bleed through.
             Color.black.ignoresSafeArea()
 
@@ -51,27 +51,28 @@ struct NowPlayingView: View {
             )
             .ignoresSafeArea()
 
+            // Player content (topBar + leftPlayer) — fills the whole
+            // ZStack. Padded on the trailing side so the pane area
+            // doesn't overlap the player's content.
             VStack(spacing: 0) {
                 topBar
-
-                // Use .overlay rather than ZStack alignment so the side
-                // pane is anchored to the LEFT-PLAYER's bounding box. In
-                // fullscreen the prior ZStack was leaving the pane in some
-                // unexpected layout state and it never showed. Overlay's
-                // alignment is rock-solid against any window size.
                 leftPlayer
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.leading, 24)
-                    .padding(.trailing, 380 + 16 + 24)
                     .padding(.bottom, 24)
-                    .overlay(alignment: .topTrailing) {
-                        sidePane
-                            .frame(width: 380)
-                            .padding(.trailing, 24)
-                            .padding(.bottom, 24)
-                    }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.trailing, 380 + 24 + 16)  // reserve space for the pane
+
+            // Side pane — sibling of the player VStack inside the same
+            // outer ZStack. Anchored top-trailing via the ZStack's
+            // alignment. Independent of any child layout calculations,
+            // so it can never get squeezed off-screen by player sizing.
+            sidePane
+                .frame(width: 380)
+                .padding(.top, 8)
+                .padding(.trailing, 24)
+                .padding(.bottom, 24)
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
