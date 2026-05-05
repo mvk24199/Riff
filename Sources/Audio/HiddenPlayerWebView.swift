@@ -73,10 +73,7 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
               let event = Self.decode(eventName: name, body: body)
         else { return }
 
-        #if DEBUG
-        print("[Riff bridge] \(name) \(body)")
-        #endif
-
+        Log.bridge.debug("\(name, privacy: .public) \(String(describing: body), privacy: .public)")
         onEvent?(event)
     }
 

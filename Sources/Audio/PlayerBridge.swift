@@ -93,15 +93,11 @@ final class PlayerBridge {
     /// queue. Silently no-ops if the browse has no playable item.
     private func playByResolvingBrowseId(_ browseId: String) async {
         guard let tuple = (try? await innerTube.playable(forBrowseId: browseId)) ?? nil else {
-            #if DEBUG
-            print("[Riff resolver] \(browseId) → no playable endpoint found")
-            #endif
+            Log.resolver.debug("\(browseId, privacy: .public) → no playable endpoint found")
             return
         }
         let url = watchURL(videoId: tuple.videoId, playlistId: tuple.playlistId)
-        #if DEBUG
-        print("[Riff resolver] \(browseId) → v=\(tuple.videoId ?? "nil") list=\(tuple.playlistId ?? "nil") → \(url)")
-        #endif
+        Log.resolver.debug("\(browseId, privacy: .public) → v=\(tuple.videoId ?? "nil", privacy: .public) list=\(tuple.playlistId ?? "nil", privacy: .public) → \(url, privacy: .public)")
         await navigate(url)
     }
 

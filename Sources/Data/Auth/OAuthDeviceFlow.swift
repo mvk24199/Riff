@@ -124,10 +124,8 @@ final class OAuthDeviceFlow {
         ])
         let (data, response) = try await URLSession.shared.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        #if DEBUG
         let preview = String(data: data, encoding: .utf8) ?? ""
-        print("[Riff oauth] device/code status=\(status) body=\(preview)")
-        #endif
+        Log.oauth.debug("device/code status=\(status) body=\(preview, privacy: .public)")
 
         if status != 200 {
             if let err = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
@@ -170,16 +168,12 @@ final class OAuthDeviceFlow {
                 data = d
                 status = (r as? HTTPURLResponse)?.statusCode ?? 0
             } catch {
-                #if DEBUG
-                print("[Riff oauth] poll network error: \(error.localizedDescription) — retrying")
-                #endif
+                Log.oauth.debug("poll network error: \(error.localizedDescription, privacy: .public) — retrying")
                 continue
             }
 
-            #if DEBUG
-            let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
-            print("[Riff oauth] poll status=\(status) body=\(preview)")
-            #endif
+            let preview = String(data: data, encoding: .utf8) ?? ""
+            Log.oauth.debug("poll status=\(status) body=\(preview, privacy: .public)")
 
             if status == 200 {
                 do {

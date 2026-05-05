@@ -80,15 +80,12 @@ final class InnerTubeClient: Sendable {
             return []
         }
 
-        #if DEBUG
-        print("[Riff search] filter=\(filter) shelves=\(shelves.count) results=\(results.count)")
+        Log.innertube.debug("search filter=\(String(describing: filter), privacy: .public) shelves=\(shelves.count) results=\(results.count)")
         if results.isEmpty, !shelves.isEmpty {
             for (i, shelf) in shelves.enumerated() {
-                print("[Riff search]   shelf[\(i)] keys=\(Array(shelf.keys))")
+                Log.innertube.debug("  search shelf[\(i)] keys=\(Array(shelf.keys), privacy: .public)")
             }
         }
-        #endif
-
         return results
     }
 
@@ -101,13 +98,12 @@ final class InnerTubeClient: Sendable {
         case .artists:   browseId = BrowseID.libraryArtists
         case .podcasts:  browseId = BrowseID.libraryPodcasts
         }
+        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) browseId=\(browseId, privacy: .public)")
         let body = try await postRaw(.browse, body: ["browseId": browseId])
         let shelves = Parsing.array(body, "contents",
             "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
-        return shelves.flatMap { shelf -> [MediaItem] in
-            // Liked Songs → musicShelfRenderer (list); Playlists/Albums →
-            // gridRenderer (tiles). Try both shapes.
+        let results = shelves.flatMap { shelf -> [MediaItem] in
             if let items = Parsing.array(shelf, "musicShelfRenderer", "contents") {
                 return items.compactMap(Self.parseListItem)
             }
@@ -119,6 +115,15 @@ final class InnerTubeClient: Sendable {
             }
             return []
         }
+        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) shelves=\(shelves.count) results=\(results.count)")
+        if results.isEmpty {
+            // Dump the top-level keys + first shelf shape so we can see what
+            // shape the response actually has when sign-in works but the
+            // parser can't extract anything.
+            let topKeys = (body["contents"] as? [String: Any])?.keys.first ?? "?"
+            Log.innertube.debug("  library empty: top contents key=\(topKeys, privacy: .public) shelf[0] keys=\(shelves.first.map { Array($0.keys) } ?? [], privacy: .public)")
+        }
+        return results
     }
 
     /// Resolve a browseId (album / podcast / artist) into a playable
@@ -292,11 +297,17 @@ final class InnerTubeClient: Sendable {
         // fall back to SAPISIDHASH cookies if the user signed in via the
         // (mostly broken) embedded WebView. Anonymous calls have neither
         // and Google still serves browse/search.
+        let authMode: String
         if let bearer = await Self.bearerAuthHeader() {
             req.setValue(bearer, forHTTPHeaderField: "Authorization")
+            authMode = "bearer"
         } else if let auth = Self.sapisidHashAuthHeader() {
             req.setValue(auth, forHTTPHeaderField: "Authorization")
+            authMode = "sapisid"
+        } else {
+            authMode = "anonymous"
         }
+        Log.innertube.debug("→ \(endpoint.rawValue, privacy: .public) auth=\(authMode, privacy: .public)")
 
         var payload = body
         payload["context"] = [
