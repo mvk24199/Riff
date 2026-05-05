@@ -84,18 +84,20 @@ Queue editing • playlist editing • adding to library • lyrics syncing • 
 
 ---
 
-## Phase 2 — Core parity (4-6 weeks)
+## Phase 2 — Core parity (4-6 weeks) — *most items shipped*
 
-- **Sign-in via OAuth Device Flow** — Google actively blocks WKWebView sign-in (`navigator.webdriver` / network-stack fingerprinting); UA spoofing doesn't beat it. The TV-app-style flow is the only path that works end-to-end: user opens a verification URL on another device, enters a 6-digit code, Riff polls for a token. Requires registering a Google OAuth client (TV/limited-input device type) + token-refresh plumbing + Keychain storage.
-- **Queue management** — reorder, remove, jump-to. SwiftUI drag-drop on Up Next list.
-- **Library write operations** — like/unlike, add-to-playlist, create playlist, remove from playlist.
-- **Synced lyrics** — InnerTube lyrics endpoint + word-level timing render.
-- **Album / Artist / Playlist detail pages** — full SwiftUI, header art + track list.
-- **Podcasts (dedicated UX)** — Podcasts section under Library, episode list with show notes/descriptions, **playback speed** (0.75x/1.0x/1.25x/1.5x/2.0x), **skip ±15/30s** buttons, "continue listening" position memory per episode. Subscribe/unsubscribe.
-- **Mini player window** — detachable always-on-top floating window (NSPanel with `.floatingPanel` style mask).
-- **Settings panel** — audio quality, theme, keyboard shortcuts, sign-out.
-- **History tab** under Library.
-- **Search filters** (year, duration, type=song/album/podcast/episode/playlist).
+- ✅ **Sign-in** — shipped via Kaset's WebView pattern (Safari UA + accounts.google.com/ServiceLogin direct nav), with OAuth Device Flow available as a fallback in Settings → Library access (advanced) for users who want Data API v3 access. The Device Flow path was a dead end for our default TV client_id (Data API v3 disabled for that GCP project).
+- ✅ **Library write operations** — like/unlike shipped (heart in player); add-to-playlist shipped (text.badge.plus menu in player). Create playlist + remove from playlist still pending.
+- ✅ **Album / Artist / Playlist detail pages** — shipped via DetailView with NavigationStack; tracklist scoped to musicShelfRenderer / musicPlaylistShelfRenderer to prevent "More from artist" carousels bleeding into the tracklist.
+- ✅ **Podcasts skip ±15/30s** — shipped (gobackward.15 + goforward.30 buttons in player); playback speed (0.5×–2×) shipped via menu.
+- ✅ **Mini player window** — shipped: separate SwiftUI `Window` scene with `WindowFloater` NSViewRepresentable that sets `level = .floating`, `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`. Toggle via ⌥⌘M.
+- ✅ **Settings panel** — Account section, Keyboard shortcuts list, Library access (advanced) DisclosureGroup, About. Theme toggle deferred (app is dark-only by design).
+- ✅ **History tab** under Library — shipped.
+- ✅ **Volume control** — slider in mini player (not in original Phase 2 list but obvious gap).
+- 🚧 **Queue management** — local "Remove from Queue" via context menu shipped. Drag-to-reorder + server-side queue mutation deferred (InnerTube's queue mutation endpoint not documented for our client).
+- 🚧 **Synced lyrics** — plain lyrics shipped; word-level timing requires a different InnerTube endpoint and parser, deferred.
+- 🚧 **Podcasts dedicated UX** — Library section + show-notes/descriptions UI deferred. "Continue listening" position memory deferred.
+- 🚧 **Search filters** — type filter shipped (songs/albums/playlists/artists/podcasts paramsTokens). Year/duration deferred — YT Music search params are protobuf-encoded; reliably constructing them client-side isn't feasible without reverse-engineering more tokens. Client-side post-filtering of duration is possible but requires parsing duration into MediaItem first.
 
 ---
 
