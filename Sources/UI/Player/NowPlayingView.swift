@@ -46,16 +46,6 @@ struct NowPlayingView: View {
             .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            GeometryReader { geo in
-                Color.clear.onAppear {
-                    Log.bridge.debug("[NowPlayingView geom] size=\(geo.size.width, format: .fixed(precision: 0))x\(geo.size.height, format: .fixed(precision: 0))")
-                }
-                .onChange(of: geo.size) { _, newSize in
-                    Log.bridge.debug("[NowPlayingView geom] resize=\(newSize.width, format: .fixed(precision: 0))x\(newSize.height, format: .fixed(precision: 0))")
-                }
-            }
-        )
         .background {
             // Backdrops as a background stack — entirely behind the
             // foreground; their sizes have no effect on the foreground's
@@ -122,43 +112,11 @@ struct NowPlayingView: View {
         .padding(.vertical, 14)
     }
 
-    // MARK: - Player blocks (used by the vertical layout above)
+    // MARK: - Left column (artwork + title + scrubber + transport)
 
-    private var artwork: some View {
-        let track = env.player.currentTrack
-        return AsyncImage(url: track?.thumbnailURL) { phase in
-            switch phase {
-            case .success(let img): img.resizable().aspectRatio(contentMode: .fit)
-            default: Color.white.opacity(0.06)
-            }
-        }
-        .frame(width: 320, height: 320)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
-    }
-
-    private var titleAndSubtitle: some View {
-        let track = env.player.currentTrack
-        return VStack(spacing: 4) {
-            Text(track?.title ?? "—")
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-            Text(track?.subtitle ?? "")
-                .font(.system(size: 14))
-                .foregroundStyle(.white.opacity(0.7))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 32)
-    }
-
-    /// Legacy left-column view from the side-pane experiment. Kept so any
-    /// stale references compile, but no longer rendered by `body`.
-    @ViewBuilder
     private var leftPlayer: some View {
         let track = env.player.currentTrack
-        VStack(spacing: 22) {
+        return VStack(spacing: 22) {
             Spacer(minLength: 8)
             AsyncImage(url: track?.thumbnailURL) { phase in
                 switch phase {
@@ -168,15 +126,20 @@ struct NowPlayingView: View {
             }
             .frame(width: 320, height: 320)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
+
             VStack(spacing: 4) {
                 Text(track?.title ?? "—")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
                 Text(track?.subtitle ?? "")
                     .font(.system(size: 14))
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(1)
             }
+            .padding(.horizontal, 32)
 
             scrubber
                 .frame(maxWidth: 480)
@@ -188,51 +151,7 @@ struct NowPlayingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Bottom tabs (vertical layout — Up Next / Lyrics / Related)
-
-    /// Used by the live vertical layout. Same content as `sidePane` but
-    /// renders inline beneath the player rather than as a side column.
-    private var bottomTabs: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 0) {
-                ForEach(BottomTab.allCases) { t in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { bottomTab = t }
-                    } label: {
-                        VStack(spacing: 6) {
-                            Text(t.rawValue)
-                                .font(.system(size: 13, weight: bottomTab == t ? .semibold : .regular))
-                                .foregroundStyle(bottomTab == t ? .white : .white.opacity(0.6))
-                            Rectangle()
-                                .fill(bottomTab == t ? Theme.red : Color.clear)
-                                .frame(height: 2)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Divider().background(Color.white.opacity(0.15))
-            Group {
-                switch bottomTab {
-                case .upNext:  upNextContent
-                case .lyrics:  lyricsContent
-                case .related: relatedContent
-                }
-            }
-            .id(bottomTab)
-            .transition(.opacity)
-        }
-        .padding(16)
-        .background(Color(white: 0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-        )
-    }
-
-    // MARK: - (Legacy) side pane — unused by the live layout
+    // MARK: - Right column (Up Next / Lyrics / Related side pane)
 
     private var sidePane: some View {
         VStack(spacing: 14) {
@@ -346,8 +265,43 @@ struct NowPlayingView: View {
             controlButton(systemName: "forward.fill", size: 22, tint: .white) {
                 Task { await env.player.next() }
             }
-            controlButton(systemName: "shuffle", size: 18, tint: .white.opacity(0.6)) { }
+            playbackRateMenu
         }
+    }
+
+    /// Playback-speed picker. 1× by default; useful for podcasts at 1.25–2×.
+    /// Replaces the inert shuffle button which we don't have a real backend
+    /// for yet (YT Music's shuffle is server-driven inside the queue).
+    private var playbackRateMenu: some View {
+        Menu {
+            ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0], id: \.self) { rate in
+                Button {
+                    Task { await env.player.setPlaybackRate(rate) }
+                } label: {
+                    let label = rate == 1.0 ? "Normal" : Self.formatRate(rate) + "×"
+                    if env.player.playbackRate == rate {
+                        Label(label, systemImage: "checkmark")
+                    } else {
+                        Text(label)
+                    }
+                }
+            }
+        } label: {
+            Text(env.player.playbackRate == 1.0 ? "1×" : Self.formatRate(env.player.playbackRate) + "×")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(env.player.playbackRate == 1.0 ? .white.opacity(0.6) : Theme.red)
+                .frame(width: 44, height: 40)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 44, height: 40)
+    }
+
+    private static func formatRate(_ rate: Double) -> String {
+        rate.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(rate))
+            : String(format: "%g", rate)
     }
 
     private func controlButton(systemName: String, size: CGFloat, tint: Color, action: @escaping () -> Void) -> some View {
@@ -431,25 +385,38 @@ struct NowPlayingView: View {
     }
 
     private func queueList(_ items: [MediaItem]) -> some View {
-        LazyVStack(alignment: .leading, spacing: 4) {
+        let currentId = env.player.currentTrack?.videoId
+        return LazyVStack(alignment: .leading, spacing: 4) {
             ForEach(items) { item in
+                let isCurrent = item.id == currentId
                 Button {
                     Task { await env.player.play(item: item) }
                 } label: {
                     HStack(spacing: 10) {
-                        AsyncImage(url: item.thumbnailURL) { phase in
-                            if case .success(let img) = phase {
-                                img.resizable().aspectRatio(contentMode: .fill)
-                            } else {
-                                Color.white.opacity(0.06)
+                        ZStack {
+                            AsyncImage(url: item.thumbnailURL) { phase in
+                                if case .success(let img) = phase {
+                                    img.resizable().aspectRatio(contentMode: .fill)
+                                } else {
+                                    Color.white.opacity(0.06)
+                                }
+                            }
+                            .frame(width: 36, height: 36)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            // Equalizer-style overlay on the active row.
+                            if isCurrent {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(.black.opacity(0.5))
+                                    .frame(width: 36, height: 36)
+                                Image(systemName: env.player.isPlaying ? "speaker.wave.2.fill" : "pause.fill")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(Theme.red)
                             }
                         }
-                        .frame(width: 36, height: 36)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.white)
+                                .font(.system(size: 12, weight: isCurrent ? .semibold : .medium))
+                                .foregroundStyle(isCurrent ? Theme.red : .white)
                                 .lineLimit(1)
                             Text(item.subtitle)
                                 .font(.system(size: 10))
@@ -460,7 +427,7 @@ struct NowPlayingView: View {
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 5)
-                    .background(Color.white.opacity(0.04))
+                    .background(isCurrent ? Theme.red.opacity(0.10) : Color.white.opacity(0.04))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)

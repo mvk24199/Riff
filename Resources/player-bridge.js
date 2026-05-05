@@ -28,6 +28,13 @@
         // page to load it. The /watch route auto-plays.
         navigate(url) { location.href = url; },
         togglePlay() { const v = videoEl(); if (!v) return; v.paused ? v.play() : v.pause(); },
+        setPlaybackRate(rate) { const v = videoEl(); if (v) v.playbackRate = rate; },
+        skipBy(seconds) {
+            const v = videoEl();
+            if (v && isFinite(v.duration)) {
+                v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + seconds));
+            }
+        },
         next()       { document.querySelector(".next-button")?.click(); },
         previous()   { document.querySelector(".previous-button")?.click(); },
         seek(fraction) {

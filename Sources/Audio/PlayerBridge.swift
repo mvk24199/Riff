@@ -220,6 +220,19 @@ final class PlayerBridge {
         await eval("window.musicBridge.seek(\(fraction))")
     }
 
+    /// Playback rate (0.5x – 2.0x). Useful for podcasts; works for music
+    /// too. Persists across track changes within the same WebView session.
+    private(set) var playbackRate: Double = 1.0
+    func setPlaybackRate(_ rate: Double) async {
+        playbackRate = rate
+        await eval("window.musicBridge.setPlaybackRate(\(rate))")
+    }
+
+    /// Skip ±N seconds — podcast-style transport. Negative skips back.
+    func skip(by seconds: Double) async {
+        await eval("window.musicBridge.skipBy(\(seconds))")
+    }
+
     private func eval(_ js: String) async {
         guard bridgeReady else {
             pendingCommands.append(js)
