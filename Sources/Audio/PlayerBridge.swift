@@ -233,6 +233,15 @@ final class PlayerBridge {
         await eval("window.musicBridge.skipBy(\(seconds))")
     }
 
+    /// Remove a track from the local Up Next list. Doesn't (yet) sync the
+    /// removal to YT Music's server-side queue — InnerTube's queue-mutation
+    /// endpoint isn't documented for our client; the WebView's queue still
+    /// holds the original list. Treat this as a local-UX hint until we
+    /// implement a JS bridge into the page's queue API.
+    func removeFromQueue(videoId: String) async {
+        upNext.removeAll { $0.id == videoId }
+    }
+
     /// Volume 0.0...1.0. Persisted across track changes within the session
     /// (defaults to 1.0 on launch, the WebView's natural state).
     private(set) var volume: Double = 1.0

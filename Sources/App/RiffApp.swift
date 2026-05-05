@@ -24,7 +24,30 @@ struct RiffApp: App {
                 Button("Settings…") { environment.isSettingsSheetPresented = true }
                     .keyboardShortcut(",", modifiers: .command)
             }
+            CommandGroup(after: .windowArrangement) {
+                MiniPlayerMenuItem()
+            }
         }
+
+        // Always-on-top compact playback strip in a separate window.
+        // Open via Window → Mini Player (⌥⌘M).
+        Window("Mini Player", id: "mini-player") {
+            FloatingMiniPlayerView()
+                .environment(environment)
+        }
+        .defaultSize(width: 360, height: 70)
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+    }
+}
+
+/// Re-usable menu item that opens the Mini Player window. Lives in its
+/// own struct so it can use `@Environment(\.openWindow)`.
+private struct MiniPlayerMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Mini Player") { openWindow(id: "mini-player") }
+            .keyboardShortcut("M", modifiers: [.command, .option])
     }
 }
 

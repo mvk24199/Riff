@@ -241,13 +241,17 @@ struct NowPlayingView: View {
     }
 
     private var playbackControls: some View {
-        HStack(spacing: 22) {
+        HStack(spacing: 16) {
             controlButton(
                 systemName: env.player.liked ? "heart.fill" : "heart",
                 size: 20,
                 tint: env.player.liked ? Theme.red : .white.opacity(0.7)
             ) {
                 Task { await env.player.toggleLike() }
+            }
+            // Skip-back -15s — useful for any track but especially podcasts.
+            controlButton(systemName: "gobackward.15", size: 20, tint: .white.opacity(0.85)) {
+                Task { await env.player.skip(by: -15) }
             }
             controlButton(systemName: "backward.fill", size: 22, tint: .white) {
                 Task { await env.player.previous() }
@@ -264,6 +268,10 @@ struct NowPlayingView: View {
             .onTapGesture { Task { await env.player.togglePlay() } }
             controlButton(systemName: "forward.fill", size: 22, tint: .white) {
                 Task { await env.player.next() }
+            }
+            // Skip-forward +30s.
+            controlButton(systemName: "goforward.30", size: 20, tint: .white.opacity(0.85)) {
+                Task { await env.player.skip(by: 30) }
             }
             playbackRateMenu
         }
@@ -392,47 +400,59 @@ struct NowPlayingView: View {
                 Button {
                     Task { await env.player.play(item: item) }
                 } label: {
-                    HStack(spacing: 10) {
-                        ZStack {
-                            AsyncImage(url: item.thumbnailURL) { phase in
-                                if case .success(let img) = phase {
-                                    img.resizable().aspectRatio(contentMode: .fill)
-                                } else {
-                                    Color.white.opacity(0.06)
-                                }
-                            }
-                            .frame(width: 36, height: 36)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                            // Equalizer-style overlay on the active row.
-                            if isCurrent {
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(.black.opacity(0.5))
-                                    .frame(width: 36, height: 36)
-                                Image(systemName: env.player.isPlaying ? "speaker.wave.2.fill" : "pause.fill")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(Theme.red)
-                            }
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title)
-                                .font(.system(size: 12, weight: isCurrent ? .semibold : .medium))
-                                .foregroundStyle(isCurrent ? Theme.red : .white)
-                                .lineLimit(1)
-                            Text(item.subtitle)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white.opacity(0.55))
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 5)
-                    .background(isCurrent ? Theme.red.opacity(0.10) : Color.white.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    queueRow(item: item, isCurrent: isCurrent)
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    Button("Play") { Task { await env.player.play(item: item) } }
+                    Divider()
+                    Button("Remove from Queue") {
+                        Task { await env.player.removeFromQueue(videoId: item.id) }
+                    }
+                    .disabled(isCurrent)  // can't remove the playing track
+                }
             }
         }
+    }
+
+    private func queueRow(item: MediaItem, isCurrent: Bool) -> some View {
+        HStack(spacing: 10) {
+            ZStack {
+                AsyncImage(url: item.thumbnailURL) { phase in
+                    if case .success(let img) = phase {
+                        img.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color.white.opacity(0.06)
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                // Equalizer-style overlay on the active row.
+                if isCurrent {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(.black.opacity(0.5))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: env.player.isPlaying ? "speaker.wave.2.fill" : "pause.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.red)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.system(size: 12, weight: isCurrent ? .semibold : .medium))
+                    .foregroundStyle(isCurrent ? Theme.red : .white)
+                    .lineLimit(1)
+                Text(item.subtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .background(isCurrent ? Theme.red.opacity(0.10) : Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private func emptyHint(_ text: String) -> some View {
