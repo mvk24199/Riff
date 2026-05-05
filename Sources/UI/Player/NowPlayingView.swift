@@ -30,7 +30,7 @@ struct NowPlayingView: View {
 
     var body: some View {
         let track = env.player.currentTrack
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             // Solid black base so the underlying tab content can never bleed through.
             Color.black.ignoresSafeArea()
 
@@ -51,27 +51,26 @@ struct NowPlayingView: View {
             )
             .ignoresSafeArea()
 
-            // Player content (topBar + leftPlayer)
+            // Top-level HStack — player on left, pane on right. The HStack
+            // spans the full window thanks to the trailing
+            // .frame(maxWidth: .infinity, maxHeight: .infinity), and divides
+            // its width between leftPlayer (flexible, fills the remainder)
+            // and sidePane (fixed 380pt). Wrapped in a VStack so topBar
+            // sits above both.
             VStack(spacing: 0) {
                 topBar
-                leftPlayer
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.leading, 24)
-                    .padding(.bottom, 24)
+                HStack(spacing: 16) {
+                    leftPlayer
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    sidePane
+                        .frame(width: 380, alignment: .top)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.trailing, 380 + 24 + 16)
-            .border(.green, width: 2)  // DEBUG: outline player VStack
-
-            // Side pane — sibling of the player VStack
-            sidePane
-                .frame(width: 380)
-                .padding(.top, 8)
-                .padding(.trailing, 24)
-                .padding(.bottom, 24)
-                .border(.yellow, width: 2)  // DEBUG: outline side pane container
         }
-        .border(.red, width: 3)  // DEBUG: outline outermost ZStack (the whole NowPlayingView)
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
