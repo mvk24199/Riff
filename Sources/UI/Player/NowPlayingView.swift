@@ -443,6 +443,11 @@ struct NowPlayingView: View {
                 .contextMenu {
                     Button("Play") { Task { await env.player.play(item: item) } }
                     Divider()
+                    Button("Move Up") { env.player.moveInQueue(videoId: item.id, by: -1) }
+                        .disabled(isCurrent)
+                    Button("Move Down") { env.player.moveInQueue(videoId: item.id, by: 1) }
+                        .disabled(isCurrent)
+                    Divider()
                     Button("Remove from Queue") {
                         Task { await env.player.removeFromQueue(videoId: item.id) }
                     }
