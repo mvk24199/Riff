@@ -121,7 +121,12 @@ final class OAuthDeviceFlow {
             "client_id": Self.clientId,
             "scope": Self.scope,
         ])
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        #if DEBUG
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+        print("[Riff oauth] device/code status=\(status) body=\(preview)")
+        #endif
         return try JSONDecoder().decode(DeviceCodeResponse.self, from: data)
     }
 
@@ -131,19 +136,38 @@ final class OAuthDeviceFlow {
             do {
                 try await Task.sleep(nanoseconds: UInt64(interval) * NSEC_PER_SEC)
             } catch { return }
+
+            var req = URLRequest(url: Self.tokenURL)
+            req.httpMethod = "POST"
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            req.httpBody = formEncode([
+                "client_id": Self.clientId,
+                "client_secret": Self.clientSecret,
+                "code": deviceCode,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            ])
+
+            let data: Data
+            let status: Int
             do {
-                var req = URLRequest(url: Self.tokenURL)
-                req.httpMethod = "POST"
-                req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-                req.httpBody = formEncode([
-                    "client_id": Self.clientId,
-                    "client_secret": Self.clientSecret,
-                    "code": deviceCode,
-                    "grant_type": "http://oauth.net/grant_type/device/1.0",
-                ])
-                let (data, response) = try await URLSession.shared.data(for: req)
-                let http = response as? HTTPURLResponse
-                if http?.statusCode == 200, let token = try? JSONDecoder().decode(TokenResponse.self, from: data) {
+                let (d, r) = try await URLSession.shared.data(for: req)
+                data = d
+                status = (r as? HTTPURLResponse)?.statusCode ?? 0
+            } catch {
+                #if DEBUG
+                print("[Riff oauth] poll network error: \(error.localizedDescription) — retrying")
+                #endif
+                continue
+            }
+
+            #if DEBUG
+            let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+            print("[Riff oauth] poll status=\(status) body=\(preview)")
+            #endif
+
+            if status == 200 {
+                do {
+                    let token = try JSONDecoder().decode(TokenResponse.self, from: data)
                     let tokens = OAuthTokens(
                         accessToken: token.access_token,
                         refreshToken: token.refresh_token,
@@ -152,26 +176,32 @@ final class OAuthDeviceFlow {
                     try tokens.save()
                     state = .success
                     return
+                } catch {
+                    state = .failure("Couldn't decode token: \(error.localizedDescription)")
+                    return
                 }
-                if let err = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
-                    switch err.error {
-                    case "authorization_pending", "slow_down":
-                        continue  // expected — keep polling
-                    case "access_denied":
-                        state = .failure("Sign-in was denied")
-                        return
-                    case "expired_token":
-                        state = .failure("Code expired. Please try again.")
-                        return
-                    default:
-                        state = .failure(err.error)
-                        return
-                    }
-                }
-            } catch {
-                // Transient network blip; the loop will retry.
-                continue
             }
+
+            // Non-200: expect an OAuth error code.
+            if let err = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
+                switch err.error {
+                case "authorization_pending", "slow_down":
+                    continue  // expected — keep polling
+                case "access_denied":
+                    state = .failure("Sign-in was denied")
+                    return
+                case "expired_token":
+                    state = .failure("Code expired. Please try again.")
+                    return
+                default:
+                    state = .failure("Google returned: \(err.error)")
+                    return
+                }
+            }
+
+            // Unrecognised response shape.
+            state = .failure("Unexpected status \(status) from token endpoint")
+            return
         }
         if !Task.isCancelled {
             state = .failure("Sign-in timed out. Please try again.")
