@@ -86,6 +86,7 @@ Queue editing • playlist editing • adding to library • lyrics syncing • 
 
 ## Phase 2 — Core parity (4-6 weeks)
 
+- **Sign-in via OAuth Device Flow** — Google actively blocks WKWebView sign-in (`navigator.webdriver` / network-stack fingerprinting); UA spoofing doesn't beat it. The TV-app-style flow is the only path that works end-to-end: user opens a verification URL on another device, enters a 6-digit code, Riff polls for a token. Requires registering a Google OAuth client (TV/limited-input device type) + token-refresh plumbing + Keychain storage.
 - **Queue management** — reorder, remove, jump-to. SwiftUI drag-drop on Up Next list.
 - **Library write operations** — like/unlike, add-to-playlist, create playlist, remove from playlist.
 - **Synced lyrics** — InnerTube lyrics endpoint + word-level timing render.

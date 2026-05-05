@@ -25,6 +25,12 @@ This project inverts that architecture: **all** browse, search, library, and pla
 
 🚧 **Pre-MVP.** See [`PLAN.md`](PLAN.md), [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md), and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+> **Sign-in note**: Google blocks Google-account sign-in inside embedded
+> webviews on macOS. Anonymous browse + click-to-play work fully today; the
+> Library tab requires sign-in, which is implemented as a stub that surfaces
+> the wall. Proper Phase 2 fix is OAuth Device Flow (TV-style code entry),
+> tracked in PLAN.md.
+
 ## Roadmap
 
 | Phase | Scope | Target |

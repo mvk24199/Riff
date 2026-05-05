@@ -8,22 +8,24 @@ final class AppEnvironment {
     let player: PlayerBridge
     let nowPlaying: NowPlayingCenter
 
-    /// Set to true once the user has signed in via the modal sheet. Persisted
-    /// across launches; the InnerTube cookie sync runs on transitions.
-    var hasSignedIn: Bool {
-        didSet {
-            UserDefaults.standard.set(hasSignedIn, forKey: Self.signedInKey)
-            if hasSignedIn { Task { await CookieJar.syncFromWebView() } }
-        }
+    /// Inferred from the `SAPISID` cookie set by an in-flight WebView
+    /// session. Recomputed each access; not persisted directly because the
+    /// cookie itself is the source of truth.
+    var isSignedIn: Bool {
+        let names: Set<String> = ["SAPISID", "__Secure-3PAPISID"]
+        return HTTPCookieStorage.shared.cookies?.contains(where: { names.contains($0.name) }) ?? false
     }
 
-    private static let signedInKey = "riff.hasSignedIn"
+    /// Drives the manual presentation of the sign-in sheet. Set to true from
+    /// the menu bar action or Library empty-state CTA. Sign-in is not
+    /// auto-presented — the app works anonymously by default. See plan
+    /// "Phase E.0 — Anonymous-first sign-in pivot" for context.
+    var isSignInSheetPresented: Bool = false
 
     init() {
         self.innerTube = InnerTubeClient()
         self.player = PlayerBridge(innerTube: innerTube)
         self.nowPlaying = NowPlayingCenter(player: player)
-        self.hasSignedIn = UserDefaults.standard.bool(forKey: Self.signedInKey)
 
         // Mirror PlayerBridge state into MPNowPlayingInfoCenter on every
         // change. NowPlayingCenter holds a strong ref to player; here we go

@@ -13,6 +13,12 @@ struct RiffApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Sign In…") { environment.isSignInSheetPresented = true }
+                    .keyboardShortcut("L", modifiers: [.command, .shift])
+            }
+        }
     }
 }
 
@@ -20,6 +26,7 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var env
 
     var body: some View {
+        @Bindable var env = env
         ZStack(alignment: .bottom) {
             MainTabs()
             if env.player.hasTrack {
@@ -28,10 +35,7 @@ struct RootView: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
-        .sheet(isPresented: .init(
-            get: { !env.hasSignedIn },
-            set: { _ in }
-        )) {
+        .sheet(isPresented: $env.isSignInSheetPresented) {
             SignInView()
         }
     }

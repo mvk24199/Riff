@@ -1,15 +1,21 @@
 import SwiftUI
 import WebKit
 
-/// The single place a WKWebView is visible to the user.
+/// Optional sign-in surface. Manually invoked from the menu bar
+/// ("Riff › Sign In…", ⇧⌘L) or the Library tab's empty-state CTA.
 ///
-/// Presented as a sheet on first launch; loads the YouTube Music sign-in flow
-/// directly so the user authenticates via Google's normal pages. Once the
-/// webview lands on a `music.youtube.com/*` URL with the `SAPISID` cookie set,
-/// the parent flips `AppEnvironment.hasSignedIn = true`, dismisses the sheet,
-/// and `CookieJar.syncFromWebView()` mirrors cookies into `HTTPCookieStorage`
-/// so `InnerTubeClient` requests carry the session. From that point on the
-/// WKWebView the audio engine uses is offscreen — see [HiddenPlayerWebView].
+/// **Known limitation**: Google blocks Google-account sign-in from embedded
+/// webviews ("Couldn't sign you in. This browser or app may not be secure")
+/// as an anti-account-takeover measure. UA spoofing alone doesn't beat the
+/// fingerprinting (navigator.webdriver / plugins / network stack). Until we
+/// implement OAuth Device Flow as a Phase 2 task, this sheet ships as a
+/// best-effort stub: cookies will be picked up correctly *if* the user
+/// somehow gets past the wall, but the typical experience is "this doesn't
+/// work, dismiss and use anonymous mode." Anonymous browse + click-to-play
+/// works fully — only Library and personalization need the session.
+///
+/// On successful sign-in (SAPISID cookie present), `CookieJar.syncFromWebView`
+/// mirrors cookies into `HTTPCookieStorage` so `InnerTubeClient` picks them up.
 struct SignInView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -20,7 +26,7 @@ struct SignInView: View {
                 Text("Sign in to YouTube Music")
                     .font(.system(size: 16, weight: .semibold))
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Close") { dismiss() }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
             }
@@ -31,8 +37,8 @@ struct SignInView: View {
 
             SignInWebView { didSignIn in
                 if didSignIn {
-                    env.hasSignedIn = true
-                    dismiss()
+                    Task { await CookieJar.syncFromWebView() }
+                    env.isSignInSheetPresented = false
                 }
             }
             .frame(minWidth: 480, minHeight: 640)
