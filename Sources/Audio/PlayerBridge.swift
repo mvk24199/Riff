@@ -153,8 +153,22 @@ final class PlayerBridge {
                 return
             }
             Log.bridge.debug("refreshNextQueue v=\(id, privacy: .public) plid=\(playlistId ?? "nil", privacy: .public) → queue=\(response.queue.count) likeStatus=\(String(describing: response.likeStatus), privacy: .public)")
+
+            // /next sometimes returns just the currently-playing track in
+            // its queue (especially right after navigation, before the
+            // page populates the full panel). When we know we're inside
+            // a playlist, fall back to fetching the playlist's own
+            // tracklist via /browse so Up Next isn't empty.
+            var queue = response.queue
+            if queue.count <= 1, let plid = playlistId, !plid.isEmpty {
+                if let detail = try? await innerTube.playlistDetail(playlistId: plid) {
+                    Log.bridge.debug("refreshNextQueue: fallback to playlistDetail \(plid, privacy: .public) → \(detail.tracks.count) tracks")
+                    queue = detail.tracks
+                }
+            }
+
             await MainActor.run {
-                self?.upNext = response.queue
+                self?.upNext = queue
                 self?.lyricsBrowseId = response.lyricsBrowseId
                 self?.relatedBrowseId = response.relatedBrowseId
                 self?.liked = response.likeStatus == .like
