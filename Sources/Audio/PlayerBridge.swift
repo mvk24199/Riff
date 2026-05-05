@@ -54,11 +54,19 @@ final class PlayerBridge {
 
     init(innerTube: InnerTubeClient) {
         self.innerTube = innerTube
+        // Restore playback prefs from prior launch.
+        let storedVolume = UserDefaults.standard.object(forKey: Self.volumeKey) as? Double
+        let storedRate   = UserDefaults.standard.object(forKey: Self.rateKey)   as? Double
+        self.volume = storedVolume ?? 1.0
+        self.playbackRate = storedRate ?? 1.0
         // Eager init: start loading music.youtube.com offscreen at app start,
         // so by the time the user clicks anything the page is loaded.
         self.webBridge = HiddenPlayerWebView()
         self.webBridge.onEvent = { [weak self] event in self?.handle(event) }
     }
+
+    private static let volumeKey = "player.volume"
+    private static let rateKey   = "player.rate"
 
     struct Track: Hashable {
         let videoId: String
@@ -225,6 +233,7 @@ final class PlayerBridge {
     private(set) var playbackRate: Double = 1.0
     func setPlaybackRate(_ rate: Double) async {
         playbackRate = rate
+        UserDefaults.standard.set(rate, forKey: Self.rateKey)
         await eval("window.musicBridge.setPlaybackRate(\(rate))")
     }
 
@@ -240,6 +249,18 @@ final class PlayerBridge {
         try await innerTube.addToPlaylist(videoId: videoId, playlistId: playlistId)
     }
 
+    /// Create a fresh user-owned playlist and add the currently-playing
+    /// track to it. Returns the new playlistId on success.
+    @discardableResult
+    func createPlaylistWithCurrentTrack(title: String) async throws -> String? {
+        guard let videoId = currentTrack?.videoId else { return nil }
+        let plid = try await innerTube.createPlaylist(title: title)
+        if let plid {
+            try await innerTube.addToPlaylist(videoId: videoId, playlistId: plid)
+        }
+        return plid
+    }
+
     /// Remove a track from the local Up Next list. Doesn't (yet) sync the
     /// removal to YT Music's server-side queue — InnerTube's queue-mutation
     /// endpoint isn't documented for our client; the WebView's queue still
@@ -249,12 +270,25 @@ final class PlayerBridge {
         upNext.removeAll { $0.id == videoId }
     }
 
+    /// Local-only reorder. Same caveat as removeFromQueue: this only
+    /// affects the Up Next list Riff displays, not the WebView's actual
+    /// playback queue. Useful for users who want to inspect / curate
+    /// what's coming up.
+    func moveInQueue(videoId: String, by offset: Int) {
+        guard let index = upNext.firstIndex(where: { $0.id == videoId }) else { return }
+        let newIndex = max(0, min(upNext.count - 1, index + offset))
+        guard newIndex != index else { return }
+        let item = upNext.remove(at: index)
+        upNext.insert(item, at: newIndex)
+    }
+
     /// Volume 0.0...1.0. Persisted across track changes within the session
     /// (defaults to 1.0 on launch, the WebView's natural state).
     private(set) var volume: Double = 1.0
     func setVolume(_ level: Double) async {
         let clamped = max(0.0, min(1.0, level))
         volume = clamped
+        UserDefaults.standard.set(clamped, forKey: Self.volumeKey)
         await eval("window.musicBridge.setVolume(\(clamped))")
     }
 
@@ -281,7 +315,16 @@ final class PlayerBridge {
         case .ready:
             if !bridgeReady {
                 bridgeReady = true
-                Task { await flushPending() }
+                Task {
+                    await flushPending()
+                    // Re-apply persisted prefs to the freshly-loaded page.
+                    if volume != 1.0 {
+                        _ = try? await webBridge.webView.evaluateJavaScript("window.musicBridge.setVolume(\(volume))")
+                    }
+                    if playbackRate != 1.0 {
+                        _ = try? await webBridge.webView.evaluateJavaScript("window.musicBridge.setPlaybackRate(\(playbackRate))")
+                    }
+                }
             }
         case .stateChanged(let playing):
             isPlaying = playing
@@ -289,7 +332,41 @@ final class PlayerBridge {
             elapsed = t
             duration = d
         case .trackChanged(let id, let playlistId, let title, let artist, let art):
-            if currentTrack?.videoId == id {
+            // Two scenarios collide on the same `videoId`:
+            //
+            //  1. **Pre-roll ads.** YT Music plays 2-3 ad inserts before the
+            //     track starts. URL videoId stays at the song the user
+            //     clicked; mediaSession.metadata changes to the ad. Artwork
+            //     comes from i.ytimg.com (YouTube video thumbnails).
+            //  2. **Autoplay advance.** YT Music can advance to the next
+            //     track while keeping the URL videoId stable in playlist
+            //     mode. Artwork comes from lh3.googleusercontent.com (YT
+            //     Music's CDN for real song art).
+            //
+            // Discriminator: the artwork host. Real YT Music tracks always
+            // use lh3.googleusercontent.com; ad inserts always use
+            // i.ytimg.com. Update metadata when the new artwork looks
+            // genuinely musical, regardless of whether videoId matches —
+            // that catches autoplay. Skip when the artwork looks ad-shaped
+            // and the videoId matches — that catches ads.
+            let newArtworkLooksMusical = (art?.host ?? "").contains("lh3.googleusercontent.com")
+            let sameVideoId = currentTrack?.videoId == id
+            let titleChanged = currentTrack?.title != title
+
+            if sameVideoId && !newArtworkLooksMusical && titleChanged {
+                // Pre-roll ad — keep the user's clicked metadata, refresh
+                // duration if we just learned it.
+                if duration > 0, let existing = currentTrack, existing.duration == 0 {
+                    currentTrack = Track(
+                        videoId: existing.videoId,
+                        title: existing.title,
+                        subtitle: existing.subtitle,
+                        thumbnailURL: existing.thumbnailURL,
+                        duration: duration
+                    )
+                }
+            } else if sameVideoId && !titleChanged {
+                // Identical event (re-poll) — only update duration if needed.
                 if duration > 0, let existing = currentTrack, existing.duration == 0 {
                     currentTrack = Track(
                         videoId: existing.videoId,
@@ -300,6 +377,8 @@ final class PlayerBridge {
                     )
                 }
             } else {
+                // New track (different videoId) OR autoplay advance with
+                // musical artwork — adopt the JS-reported metadata.
                 currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
                 currentPlaylistId = playlistId
                 refreshNextQueueAndIds(forVideoId: id, playlistId: playlistId)

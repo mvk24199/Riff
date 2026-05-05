@@ -509,6 +509,42 @@ final class InnerTubeClient: Sendable {
         ])
     }
 
+    /// Remove a track from a user-owned playlist. `setVideoId` is the
+    /// per-playlist row identifier (different from the video's `videoId`).
+    /// We don't currently capture it from playlist detail responses; this
+    /// method is plumbing for future use.
+    func removeFromPlaylist(setVideoId: String, videoId: String, playlistId: String) async throws {
+        _ = try await postRaw(.editPlaylist, body: [
+            "playlistId": playlistId,
+            "actions": [[
+                "action": "ACTION_REMOVE_VIDEO",
+                "setVideoId": setVideoId,
+                "removedVideoId": videoId,
+            ]],
+        ])
+    }
+
+    /// Create a new user-owned playlist. Returns the new playlist's id
+    /// when YT confirms creation.
+    @discardableResult
+    func createPlaylist(title: String, description: String? = nil, privacy: PlaylistPrivacy = .private) async throws -> String? {
+        var body: [String: Any] = [
+            "title": title,
+            "privacyStatus": privacy.rawValue,
+        ]
+        if let description, !description.isEmpty {
+            body["description"] = description
+        }
+        let resp = try await postRaw(.createPlaylist, body: body)
+        return resp["playlistId"] as? String
+    }
+
+    enum PlaylistPrivacy: String, Sendable {
+        case `public` = "PUBLIC"
+        case `private` = "PRIVATE"
+        case unlisted = "UNLISTED"
+    }
+
     /// Remove a previously-set like.
     func removeLike(videoId: String) async throws {
         _ = try await postRaw(.removeLike, body: ["target": ["videoId": videoId]])

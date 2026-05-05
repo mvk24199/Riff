@@ -284,15 +284,19 @@ struct NowPlayingView: View {
         Menu {
             if !env.isSignedIn {
                 Text("Sign in to add tracks to your playlists.")
-            } else if env.userPlaylistsLoading {
-                Text("Loading…")
-            } else if env.userPlaylists.isEmpty {
-                Text("No playlists found.")
             } else {
-                ForEach(env.userPlaylists) { pl in
-                    Button(pl.title) {
-                        Task {
-                            try? await env.player.addCurrentTrackToPlaylist(playlistId: pl.id)
+                Button("New Playlist…") { env.isNewPlaylistSheetPresented = true }
+                Divider()
+                if env.userPlaylistsLoading {
+                    Text("Loading…")
+                } else if env.userPlaylists.isEmpty {
+                    Text("No playlists yet.")
+                } else {
+                    ForEach(env.userPlaylists) { pl in
+                        Button(pl.title) {
+                            Task {
+                                try? await env.player.addCurrentTrackToPlaylist(playlistId: pl.id)
+                            }
                         }
                     }
                 }

@@ -81,6 +81,9 @@ struct RootView: View {
         .sheet(isPresented: $env.isSettingsSheetPresented) {
             SettingsView()
         }
+        .sheet(isPresented: $env.isNewPlaylistSheetPresented) {
+            NewPlaylistSheet()
+        }
     }
 }
 

@@ -8,6 +8,7 @@ enum Endpoint: String {
     case like         = "like/like"
     case removeLike   = "like/removelike"
     case editPlaylist = "browse/edit_playlist"
+    case createPlaylist = "playlist/create"
 }
 
 /// Well-known browseId values used by InnerTube.

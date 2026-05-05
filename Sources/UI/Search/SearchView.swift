@@ -5,6 +5,7 @@ struct SearchView: View {
     @State private var query: String = ""
     @State private var filter: SearchFilter = .all
     @State private var results: [MediaItem] = []
+    @State private var searching: Bool = false
 
     enum SearchFilter: String, CaseIterable, Identifiable {
         case all = "All", songs = "Songs", albums = "Albums", playlists = "Playlists", artists = "Artists", podcasts = "Podcasts"
@@ -45,7 +46,16 @@ struct SearchView: View {
             .padding(.horizontal, 24)
 
             ScrollView {
-                if results.isEmpty, !query.isEmpty {
+                if searching && results.isEmpty {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Searching…")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 60)
+                } else if results.isEmpty, !query.isEmpty {
                     EmptySearchState(query: query)
                         .padding(.top, 80)
                 } else {
@@ -96,7 +106,9 @@ struct SearchView: View {
         } catch {
             return  // task was cancelled — newer input arrived
         }
-        guard !query.isEmpty else { results = []; return }
+        guard !query.isEmpty else { results = []; searching = false; return }
+        searching = true
+        defer { searching = false }
         do {
             results = try await env.innerTube.search(query: query, filter: filter)
         } catch {

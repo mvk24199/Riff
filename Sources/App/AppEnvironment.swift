@@ -39,6 +39,9 @@ final class AppEnvironment {
     /// Drives the Settings sheet (custom OAuth credentials, sign-out).
     var isSettingsSheetPresented: Bool = false
 
+    /// Drives the "New playlist" name-prompt sheet.
+    var isNewPlaylistSheetPresented: Bool = false
+
     /// Per-tab navigation paths. Held here so the TopTabBar can pop a tab
     /// to its root when the user taps the already-active tab — standard
     /// "tap home to go home" behaviour.
@@ -53,6 +56,11 @@ final class AppEnvironment {
     private(set) var userPlaylistsLoading = false
     func loadUserPlaylistsIfNeeded() {
         guard isSignedIn, !userPlaylistsLoading, userPlaylists.isEmpty else { return }
+        reloadUserPlaylists()
+    }
+
+    func reloadUserPlaylists() {
+        guard isSignedIn else { return }
         userPlaylistsLoading = true
         Task { [innerTube] in
             let items = (try? await innerTube.library(section: .playlists)) ?? []
