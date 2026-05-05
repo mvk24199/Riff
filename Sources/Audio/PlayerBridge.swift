@@ -121,19 +121,25 @@ final class PlayerBridge {
     private static let historyCap = 50
 
     private func archiveCurrent() {
-        guard let old = currentTrack else { return }
+        guard let old = currentTrack else {
+            Log.bridge.debug("archiveCurrent: no current track to archive")
+            return
+        }
         let item = MediaItem(
             id: old.videoId, kind: .song,
             title: old.title, subtitle: old.subtitle,
             thumbnailURL: old.thumbnailURL
         )
-        // Skip if it's the same track as the most-recent history entry
-        // (prevents accidental dupes when state resets).
-        if playedHistory.last?.id == item.id { return }
+        if playedHistory.last?.id == item.id {
+            Log.bridge.debug("archiveCurrent: skip dup last=\(item.title, privacy: .public) (\(item.id, privacy: .public))")
+            return
+        }
         playedHistory.append(item)
         if playedHistory.count > Self.historyCap {
             playedHistory.removeFirst(playedHistory.count - Self.historyCap)
         }
+        let size = playedHistory.count
+        Log.bridge.debug("archiveCurrent: appended \(item.title, privacy: .public) (\(item.id, privacy: .public)); historySize=\(size)")
     }
 
     /// Pull /next for the given videoId — populates `upNext` and stashes
@@ -142,7 +148,11 @@ final class PlayerBridge {
     /// list instead of generic radio suggestions.
     private func refreshNextQueueAndIds(forVideoId id: String, playlistId: String?) {
         Task { [innerTube, weak self] in
-            guard let response = try? await innerTube.nextQueue(videoId: id, playlistId: playlistId) else { return }
+            guard let response = try? await innerTube.nextQueue(videoId: id, playlistId: playlistId) else {
+                Log.bridge.debug("refreshNextQueue: nextQueue threw or returned nil for v=\(id, privacy: .public)")
+                return
+            }
+            Log.bridge.debug("refreshNextQueue v=\(id, privacy: .public) plid=\(playlistId ?? "nil", privacy: .public) → queue=\(response.queue.count) likeStatus=\(String(describing: response.likeStatus), privacy: .public)")
             await MainActor.run {
                 self?.upNext = response.queue
                 self?.lyricsBrowseId = response.lyricsBrowseId
