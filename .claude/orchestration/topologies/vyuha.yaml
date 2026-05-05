@@ -1,0 +1,32 @@
+# Vyuha (Formation) — Sequential Pipeline
+# Use for: Linear workflows where each phase's output feeds the next
+# Examples: Feature development, bug fixes, content pipelines
+
+name: vyuha
+type: sequential
+description: >
+  Sequential pipeline where agents execute in order.
+  Output of phase N becomes input of phase N+1.
+  Named after the military formations of the Mahabharata.
+
+execution:
+  mode: sequential
+  max_iterations: 1  # Each phase runs once (unless retry)
+  retry_on_failure: true
+  max_retries: 2
+
+phase_template:
+  - name: "{phase_name}"
+    agents: ["{agent_names}"]
+    artifact_in: "{input_artifact_type}"
+    artifact_out: "{output_artifact_type}"
+    timeout_minutes: 30
+    validation:
+      required: true
+      validator: "{next_phase_agent_or_duryodhana}"
+
+guardrails:
+  zero_cognitive_bias: true
+  five_question_framework: true
+  artifact_validation: true  # Every artifact validated before passing forward
+  ceo_override: krishna

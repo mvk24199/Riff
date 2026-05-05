@@ -1,0 +1,38 @@
+# Chakravyuha (Maze Formation) — Graph DAG Workflow
+# Use for: Complex multi-dependency workflows with branching and merging
+# Examples: Multi-platform features, complex refactors, system migrations
+
+name: chakravyuha
+type: graph
+description: >
+  Directed Acyclic Graph where tasks execute based on dependency resolution.
+  Tasks with satisfied dependencies run in parallel. Complex workflows with
+  branching and merging paths.
+  Named after the legendary maze formation that only Arjuna and Abhimanyu could enter.
+
+execution:
+  mode: dag
+  parallel_limit: 5  # Max concurrent tasks
+  cycle_detection: true  # Prevent circular dependencies
+  fail_fast: false  # Continue non-dependent tasks on failure
+
+node_template:
+  - id: "{task_id}"
+    agent: "{agent_name}"
+    depends_on: ["{dependency_ids}"]
+    artifact_in: ["{input_types}"]
+    artifact_out: "{output_type}"
+    can_retry: true
+    max_retries: 2
+
+merge_strategy:
+  when_all_complete: "Merge artifacts and proceed"
+  when_any_fails: "Notify dependent nodes, attempt retry, escalate if needed"
+  conflict_resolution: "Moderator agent (yudhishthira) resolves merge conflicts"
+
+guardrails:
+  zero_cognitive_bias: true
+  five_question_framework: true
+  max_depth: 10  # Maximum dependency chain depth
+  timeout_minutes: 120  # Overall workflow timeout
+  ceo_override: krishna

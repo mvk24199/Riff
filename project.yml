@@ -1,0 +1,60 @@
+# XcodeGen project definition.
+#
+# Contributors run:
+#   brew install xcodegen
+#   xcodegen generate
+#   open Riff.xcodeproj
+#
+# project.yml is the source of truth; Riff.xcodeproj is generated and
+# .gitignored.
+
+name: Riff
+options:
+  bundleIdPrefix: dev.riff
+  deploymentTarget:
+    macOS: "14.0"
+  developmentLanguage: en
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+
+targets:
+  Riff:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      - path: Resources
+        type: folder
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleName: Riff
+        CFBundleDisplayName: Riff
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.music
+        NSHumanReadableCopyright: "© 2026. AGPL-3.0."
+    entitlements:
+      path: Sources/Riff.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.riff.app
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Sources/Riff.entitlements
+
+  RiffTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Riff
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Riff.app/Contents/MacOS/Riff"

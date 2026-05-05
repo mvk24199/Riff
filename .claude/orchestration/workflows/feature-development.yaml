@@ -1,0 +1,72 @@
+# Feature Development Workflow
+# Topology: Vyuha (Sequential) with Sabha (Debate) for design review
+
+name: feature-development
+description: "End-to-end feature development from requirements to deployment"
+topology: vyuha
+
+phases:
+  - name: requirements
+    agents: [draupadi, drona]
+    description: "PM creates PRD, PO writes user stories with acceptance criteria"
+    artifact_out: ProductSpec
+    skills: [product-spec, research]
+
+  - name: design
+    agents: [yudhishthira, arjuna]
+    description: "CTO and Principal SDE create HLD and LLD"
+    artifact_in: ProductSpec
+    artifact_out: DesignDoc
+    skills: [hld, lld, research]
+
+  - name: adversarial_review
+    agents: [duryodhana]
+    description: "Red Team stress-tests the design"
+    artifact_in: DesignDoc
+    artifact_out: AdversarialReport
+    skills: [threat-modeling]
+
+  - name: design_revision
+    agents: [arjuna]
+    description: "Principal SDE addresses adversarial findings"
+    artifact_in: [DesignDoc, AdversarialReport]
+    artifact_out: RevisedDesign
+    condition: "adversarial_report.severity >= HIGH"
+    skills: [hld, lld]
+
+  - name: implementation
+    agents: [bhima, nakula]
+    description: "Backend and frontend implementation"
+    artifact_in: RevisedDesign
+    artifact_out: Code
+    sepoys_allowed: true
+    skills: [lld, code-review]
+
+  - name: testing
+    agents: [vidura, abhimanyu]
+    description: "QA testing and junior engineer learning"
+    artifact_in: Code
+    artifact_out: TestReport
+    skills: [testing]
+
+  - name: security_review
+    agents: [bhishma, shakuni]
+    description: "Security review and penetration testing"
+    artifact_in: Code
+    artifact_out: SecurityReport
+    skills: [threat-modeling]
+
+  - name: deployment
+    agents: [hanuman, drona]
+    description: "DevOps deploys, PO accepts"
+    artifact_in: [Code, TestReport, SecurityReport]
+    artifact_out: DeploymentRecord
+    skills: [ci-cd]
+    requires_approval: true
+    approver: krishna
+
+guardrails:
+  zero_cognitive_bias: true
+  five_question_framework: true
+  max_cycle_time_days: 5
+  quality_gate: "All tests pass, security review clean, PO accepted"

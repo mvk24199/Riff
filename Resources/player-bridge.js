@@ -1,0 +1,67 @@
+/*
+ * player-bridge.js
+ *
+ * Injected into music.youtube.com at documentStart by the hidden WKWebView.
+ * Exposes window.musicBridge.{playVideo, playAlbum, playPlaylist, playPodcast,
+ * playArtistRadio, togglePlay, next, previous, seek, getState} so the Swift
+ * side can drive playback through a stable surface, regardless of how YT Music
+ * restructures its internals.
+ *
+ * Also wires navigator.mediaSession events back to Swift via
+ * webkit.messageHandlers.bridge.postMessage(...).
+ */
+
+(function () {
+    "use strict";
+
+    function videoEl() { return document.querySelector("video"); }
+
+    function postEvent(payload) {
+        try {
+            window.webkit.messageHandlers.bridge.postMessage(payload);
+        } catch (_) {}
+    }
+
+    const api = {
+        playVideo(videoId) {
+            // YT Music uses a hash route for /watch; navigation kicks off load+play.
+            location.href = "https://music.youtube.com/watch?v=" + encodeURIComponent(videoId);
+        },
+        playAlbum(browseId)    { location.href = "https://music.youtube.com/browse/" + encodeURIComponent(browseId) + "?play=1"; },
+        playPlaylist(playlistId) { location.href = "https://music.youtube.com/playlist?list=" + encodeURIComponent(playlistId) + "&play=1"; },
+        playPodcast(browseId)  { location.href = "https://music.youtube.com/browse/" + encodeURIComponent(browseId) + "?play=1"; },
+        playArtistRadio(browseId) { location.href = "https://music.youtube.com/browse/" + encodeURIComponent(browseId) + "?play=1"; },
+        togglePlay() { const v = videoEl(); if (!v) return; v.paused ? v.play() : v.pause(); },
+        next()       { document.querySelector(".next-button")?.click(); },
+        previous()   { document.querySelector(".previous-button")?.click(); },
+        seek(fraction) {
+            const v = videoEl();
+            if (!v || !isFinite(v.duration)) return;
+            v.currentTime = Math.max(0, Math.min(v.duration, v.duration * fraction));
+        },
+        getState() {
+            const v = videoEl();
+            return v ? { paused: v.paused, currentTime: v.currentTime, duration: v.duration } : null;
+        },
+    };
+
+    window.musicBridge = api;
+
+    // Wire MediaSession + video element events back to Swift.
+    function attachEvents() {
+        const v = videoEl();
+        if (!v || v.__bridgeAttached) return;
+        v.__bridgeAttached = true;
+        v.addEventListener("play",       () => postEvent({ event: "stateChanged", isPlaying: true }));
+        v.addEventListener("pause",      () => postEvent({ event: "stateChanged", isPlaying: false }));
+        v.addEventListener("timeupdate", () => postEvent({ event: "progress", currentTime: v.currentTime, duration: v.duration }));
+        v.addEventListener("ended",      () => postEvent({ event: "stateChanged", isPlaying: false }));
+    }
+
+    // Re-attach as the page reorders the DOM.
+    new MutationObserver(attachEvents).observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener("DOMContentLoaded", () => {
+        attachEvents();
+        postEvent({ event: "ready" });
+    });
+})();
