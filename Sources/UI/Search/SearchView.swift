@@ -9,6 +9,19 @@ struct SearchView: View {
     enum SearchFilter: String, CaseIterable, Identifiable {
         case all = "All", songs = "Songs", albums = "Albums", playlists = "Playlists", artists = "Artists", podcasts = "Podcasts"
         var id: String { rawValue }
+
+        /// `params` token sent to /search to scope results. Reverse-engineered
+        /// from the YT Music web app; nil for "All" (unfiltered search).
+        var paramsToken: String? {
+            switch self {
+            case .all:       return nil
+            case .songs:     return "EgWKAQIIAWoMEA4QChADEAQQCRAF"
+            case .albums:    return "EgWKAQIYAWoMEA4QChADEAQQCRAF"
+            case .playlists: return "EgWKAQIoAWoMEA4QChADEAQQCRAF"
+            case .artists:   return "EgWKAQIgAWoMEA4QChADEAQQCRAF"
+            case .podcasts:  return "EgWKAQJQAWoMEA4QChADEAQQCRAF"
+            }
+        }
     }
 
     var body: some View {
