@@ -12,6 +12,7 @@ final class PlayerBridge {
     private(set) var currentTrack: Track? = nil
     var hasTrack: Bool { currentTrack != nil }
 
+    @ObservationIgnored
     private lazy var webBridge: HiddenPlayerWebView = {
         let bridge = HiddenPlayerWebView()
         bridge.onEvent = { [weak self] event in self?.handle(event) }
