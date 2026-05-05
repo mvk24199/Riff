@@ -59,6 +59,28 @@ struct MiniPlayerView: View {
                 controlButton(systemName: "forward.fill", size: 16) {
                     Task { await env.player.next() }
                 }
+
+                // Volume slider — compact, on the trailing edge so it's
+                // out of the way of the primary playback controls.
+                HStack(spacing: 6) {
+                    Image(systemName: env.player.volume == 0 ? "speaker.slash.fill"
+                                       : env.player.volume < 0.5 ? "speaker.wave.1.fill"
+                                       : "speaker.wave.2.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 18)
+                    Slider(
+                        value: Binding(
+                            get: { env.player.volume },
+                            set: { v in Task { await env.player.setVolume(v) } }
+                        ),
+                        in: 0...1
+                    )
+                    .controlSize(.small)
+                    .frame(width: 84)
+                    .tint(.white)
+                }
+                .padding(.leading, 8)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 10)

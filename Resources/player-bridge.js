@@ -35,6 +35,10 @@
                 v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + seconds));
             }
         },
+        setVolume(level) {
+            const v = videoEl();
+            if (v) v.volume = Math.max(0, Math.min(1, level));
+        },
         next()       { document.querySelector(".next-button")?.click(); },
         previous()   { document.querySelector(".previous-button")?.click(); },
         seek(fraction) {

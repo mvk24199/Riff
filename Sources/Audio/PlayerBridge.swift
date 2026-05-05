@@ -233,6 +233,15 @@ final class PlayerBridge {
         await eval("window.musicBridge.skipBy(\(seconds))")
     }
 
+    /// Volume 0.0...1.0. Persisted across track changes within the session
+    /// (defaults to 1.0 on launch, the WebView's natural state).
+    private(set) var volume: Double = 1.0
+    func setVolume(_ level: Double) async {
+        let clamped = max(0.0, min(1.0, level))
+        volume = clamped
+        await eval("window.musicBridge.setVolume(\(clamped))")
+    }
+
     private func eval(_ js: String) async {
         guard bridgeReady else {
             pendingCommands.append(js)
