@@ -157,7 +157,10 @@ final class OAuthDeviceFlow {
                 "client_id": Self.clientId,
                 "client_secret": Self.clientSecret,
                 "code": deviceCode,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                // Legacy grant_type that Google documents for OAuth 2.0 for
+                // TVs and Limited-Input Devices. The RFC 8628 urn form is
+                // rejected by this specific client_id.
+                "grant_type": "http://oauth.net/grant_type/device/1.0",
             ])
 
             let data: Data
