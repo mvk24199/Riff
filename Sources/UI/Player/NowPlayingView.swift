@@ -387,12 +387,14 @@ struct NowPlayingView: View {
                 }
             }
 
-            // Compose the queue: previously played (faded), current
-            // (highlighted), upcoming. Played history is rendered with a
-            // "Recently played" caption so the user can tell where they
-            // are in the timeline.
-            let history = env.player.playedHistory
-            let upcoming = env.player.upNext
+            // Compose the queue around the current track: previously played
+            // above (faded), upcoming below. Both lists exclude the
+            // currently-playing videoId so it never appears twice — going
+            // back to a previously-played track was making it show in both
+            // sections.
+            let currentId = env.player.currentTrack?.videoId
+            let history = env.player.playedHistory.filter { $0.id != currentId }
+            let upcoming = env.player.upNext.filter { $0.id != currentId }
             if history.isEmpty && upcoming.isEmpty {
                 emptyHint("Queue empty.")
             } else {
