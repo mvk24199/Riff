@@ -65,10 +65,13 @@ secrets/
 # Generated
 Riff.xcodeproj/
 
-# Local diagnostics (MetricKit payloads live under
-# ~/Library/Application Support/Riff/diagnostics; if anyone copies one
-# in-repo for analysis we don't want it committed).
-diagnostics/
+# MetricKit crash + perf payloads. They live under
+# ~/Library/Application Support/Riff/diagnostics; this guard is for
+# the off-chance someone copies one into the repo for analysis.
+# Pattern is `*.ips` / `*.crash` only (NOT a `diagnostics/` directory
+# pattern) because macOS's case-insensitive filesystem otherwise
+# matches our `Sources/Diagnostics/` source directory and silently
+# excludes DiagnosticsCenter.swift from `git add`.
 *.crash
 *.ips
 
