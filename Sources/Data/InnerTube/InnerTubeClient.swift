@@ -89,41 +89,130 @@ final class InnerTubeClient: Sendable {
         return results
     }
 
+    /// Library contents. Routes to the YouTube Data API v3 (over Bearer
+    /// auth) instead of InnerTube — Google's edge rejects InnerTube body
+    /// shape when an OAuth Bearer is attached, so we use the public
+    /// REST API which speaks Bearer natively. Albums/podcasts aren't
+    /// surfaced by Data API v3, so those sections return empty for now.
     func library(section: LibraryView.Section) async throws -> [MediaItem] {
-        let browseId: String
+        Log.innertube.debug("library section=\(String(describing: section), privacy: .public)")
+        let items: [MediaItem]
         switch section {
-        case .liked:     browseId = BrowseID.likedSongs
-        case .playlists: browseId = BrowseID.likedPlaylists
-        case .albums:    browseId = BrowseID.libraryAlbums
-        case .artists:   browseId = BrowseID.libraryArtists
-        case .podcasts:  browseId = BrowseID.libraryPodcasts
+        case .liked:
+            items = try await likedVideos()
+        case .playlists:
+            items = try await myPlaylists()
+        case .artists:
+            items = try await mySubscriptions()
+        case .albums, .podcasts:
+            // Data API v3 doesn't expose YT Music albums/podcasts as a list.
+            // Return empty until we add an InnerTube-via-cookies path.
+            items = []
         }
-        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) browseId=\(browseId, privacy: .public)")
-        let body = try await postRaw(.browse, body: ["browseId": browseId])
-        let shelves = Parsing.array(body, "contents",
-            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
-            "content", "sectionListRenderer", "contents") ?? []
-        let results = shelves.flatMap { shelf -> [MediaItem] in
-            if let items = Parsing.array(shelf, "musicShelfRenderer", "contents") {
-                return items.compactMap(Self.parseListItem)
-            }
-            if let items = Parsing.array(shelf, "gridRenderer", "items") {
-                return items.compactMap(Self.parseTwoRowItem)
-            }
-            if let items = Parsing.array(shelf, "musicCarouselShelfRenderer", "contents") {
-                return items.compactMap(Self.parseTwoRowItem)
-            }
-            return []
+        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) results=\(items.count)")
+        return items
+    }
+
+    // MARK: - YouTube Data API v3 (Bearer auth, googleapis.com)
+
+    private static let dataAPIBase = URL(string: "https://www.googleapis.com/youtube/v3/")!
+
+    /// `playlistItems?playlistId=LL` — "LL" is YouTube's special ID for the
+    /// signed-in user's Liked Videos playlist.
+    private func likedVideos() async throws -> [MediaItem] {
+        let resp = try await dataAPI("playlistItems", params: [
+            "playlistId": "LL",
+            "part": "snippet,contentDetails",
+            "maxResults": "50",
+        ])
+        let items = (resp["items"] as? [[String: Any]]) ?? []
+        return items.compactMap { item -> MediaItem? in
+            let snippet = item["snippet"] as? [String: Any]
+            let videoId = (item["contentDetails"] as? [String: Any])?["videoId"] as? String
+                ?? (snippet?["resourceId"] as? [String: Any])?["videoId"] as? String
+            guard let videoId else { return nil }
+            let title = snippet?["title"] as? String ?? ""
+            let artist = snippet?["videoOwnerChannelTitle"] as? String
+                ?? snippet?["channelTitle"] as? String ?? ""
+            let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
+            return MediaItem(id: videoId, kind: .song, title: title, subtitle: artist, thumbnailURL: thumb)
         }
-        Log.innertube.debug("library section=\(String(describing: section), privacy: .public) shelves=\(shelves.count) results=\(results.count)")
-        if results.isEmpty {
-            // Dump the top-level keys + first shelf shape so we can see what
-            // shape the response actually has when sign-in works but the
-            // parser can't extract anything.
-            let topKeys = (body["contents"] as? [String: Any])?.keys.first ?? "?"
-            Log.innertube.debug("  library empty: top contents key=\(topKeys, privacy: .public) shelf[0] keys=\(shelves.first.map { Array($0.keys) } ?? [], privacy: .public)")
+    }
+
+    private func myPlaylists() async throws -> [MediaItem] {
+        let resp = try await dataAPI("playlists", params: [
+            "mine": "true",
+            "part": "snippet,contentDetails",
+            "maxResults": "50",
+        ])
+        let items = (resp["items"] as? [[String: Any]]) ?? []
+        return items.compactMap { item -> MediaItem? in
+            guard let id = item["id"] as? String else { return nil }
+            let snippet = item["snippet"] as? [String: Any]
+            let title = snippet?["title"] as? String ?? ""
+            let count = (item["contentDetails"] as? [String: Any])?["itemCount"] as? Int ?? 0
+            let subtitle = count > 0 ? "\(count) tracks" : (snippet?["channelTitle"] as? String ?? "")
+            let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
+            return MediaItem(id: id, kind: .playlist, title: title, subtitle: subtitle, thumbnailURL: thumb)
         }
-        return results
+    }
+
+    private func mySubscriptions() async throws -> [MediaItem] {
+        let resp = try await dataAPI("subscriptions", params: [
+            "mine": "true",
+            "part": "snippet",
+            "maxResults": "50",
+        ])
+        let items = (resp["items"] as? [[String: Any]]) ?? []
+        return items.compactMap { item -> MediaItem? in
+            let snippet = item["snippet"] as? [String: Any]
+            let resourceId = snippet?["resourceId"] as? [String: Any]
+            guard let channelId = resourceId?["channelId"] as? String else { return nil }
+            let title = snippet?["title"] as? String ?? ""
+            let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
+            return MediaItem(id: channelId, kind: .artist, title: title, subtitle: "Channel", thumbnailURL: thumb)
+        }
+    }
+
+    /// Pick the highest-resolution thumbnail from Data API v3's
+    /// `{default, medium, high, standard, maxres}` shape.
+    private static func dataAPIThumbnail(_ thumbs: [String: Any]?) -> URL? {
+        guard let thumbs else { return nil }
+        for key in ["maxres", "standard", "high", "medium", "default"] {
+            if let t = thumbs[key] as? [String: Any], let url = t["url"] as? String, let u = URL(string: url) {
+                return u
+            }
+        }
+        return nil
+    }
+
+    /// GET against `googleapis.com/youtube/v3/<path>` with the OAuth
+    /// Bearer token. Throws `needsReauth` on 401/403 so the UI can
+    /// re-present the sign-in sheet.
+    private func dataAPI(_ path: String, params: [String: String]) async throws -> [String: Any] {
+        guard let token = await OAuthDeviceFlow.refreshIfNeeded() else {
+            throw InnerTubeError.needsReauth
+        }
+        var components = URLComponents(url: Self.dataAPIBase.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        var req = URLRequest(url: components.url!)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Log.innertube.debug("→ data/v3/\(path, privacy: .public) auth=bearer")
+
+        let (data, response) = try await session.data(for: req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if !(200..<300).contains(status) {
+            let preview = String(data: data, encoding: .utf8)?.prefix(400) ?? ""
+            Log.innertube.error("← data/v3/\(path, privacy: .public) status=\(status) body=\(preview, privacy: .public)")
+            if status == 401 || status == 403 { throw InnerTubeError.needsReauth }
+            throw InnerTubeError.http(status)
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw InnerTubeError.decoding
+        }
+        return json
     }
 
     /// Resolve a browseId (album / podcast / artist) into a playable
