@@ -51,9 +51,7 @@ struct NowPlayingView: View {
             )
             .ignoresSafeArea()
 
-            // Player content (topBar + leftPlayer) — fills the whole
-            // ZStack. Padded on the trailing side so the pane area
-            // doesn't overlap the player's content.
+            // Player content (topBar + leftPlayer)
             VStack(spacing: 0) {
                 topBar
                 leftPlayer
@@ -62,18 +60,18 @@ struct NowPlayingView: View {
                     .padding(.bottom, 24)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.trailing, 380 + 24 + 16)  // reserve space for the pane
+            .padding(.trailing, 380 + 24 + 16)
+            .border(.green, width: 2)  // DEBUG: outline player VStack
 
-            // Side pane — sibling of the player VStack inside the same
-            // outer ZStack. Anchored top-trailing via the ZStack's
-            // alignment. Independent of any child layout calculations,
-            // so it can never get squeezed off-screen by player sizing.
+            // Side pane — sibling of the player VStack
             sidePane
                 .frame(width: 380)
                 .padding(.top, 8)
                 .padding(.trailing, 24)
                 .padding(.bottom, 24)
+                .border(.yellow, width: 2)  // DEBUG: outline side pane container
         }
+        .border(.red, width: 3)  // DEBUG: outline outermost ZStack (the whole NowPlayingView)
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
