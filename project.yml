@@ -29,7 +29,7 @@ targets:
     sources:
       - path: Sources
       - path: Resources
-        type: folder
+        buildPhase: resources
     info:
       path: Sources/Info.plist
       properties:
