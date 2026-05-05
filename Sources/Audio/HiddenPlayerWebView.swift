@@ -34,6 +34,11 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
         self.webView = WKWebView(frame: .init(x: 0, y: 0, width: 1, height: 1), configuration: config)
         // Pose as Chrome — YT Music's web app gates Safari/WebKit.
         self.webView.customUserAgent = InnerTubeClient.userAgent
+        // In debug builds, expose the WebView in Safari's Develop menu so we
+        // can inspect the JS console + DOM. No-op in release.
+        #if DEBUG
+        self.webView.isInspectable = true
+        #endif
 
         self.window = NSWindow(
             contentRect: .init(x: -1000, y: -1000, width: 1, height: 1),
@@ -67,6 +72,10 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
               let name = body["event"] as? String,
               let event = Self.decode(eventName: name, body: body)
         else { return }
+
+        #if DEBUG
+        print("[Riff bridge] \(name) \(body)")
+        #endif
 
         onEvent?(event)
     }

@@ -25,14 +25,24 @@ final class PlayerBridge {
     private let innerTube: InnerTubeClient
 
     @ObservationIgnored
-    private lazy var webBridge: HiddenPlayerWebView = {
-        let bridge = HiddenPlayerWebView()
-        bridge.onEvent = { [weak self] event in self?.handle(event) }
-        return bridge
-    }()
+    private let webBridge: HiddenPlayerWebView
+
+    /// `window.musicBridge` doesn't exist until the JS user script has run.
+    /// Eval calls before the bridge fires `ready` get queued; we flush on
+    /// the first `ready` event. Without this, the very first click after
+    /// app launch races against the initial music.youtube.com load and
+    /// silently no-ops.
+    @ObservationIgnored
+    private var bridgeReady: Bool = false
+    @ObservationIgnored
+    private var pendingCommands: [String] = []
 
     init(innerTube: InnerTubeClient) {
         self.innerTube = innerTube
+        // Eager init: start loading music.youtube.com offscreen at app start,
+        // so by the time the user clicks anything the page is loaded.
+        self.webBridge = HiddenPlayerWebView()
+        self.webBridge.onEvent = { [weak self] event in self?.handle(event) }
     }
 
     struct Track: Hashable {
@@ -89,7 +99,19 @@ final class PlayerBridge {
     }
 
     private func eval(_ js: String) async {
+        guard bridgeReady else {
+            pendingCommands.append(js)
+            return
+        }
         _ = try? await webBridge.webView.evaluateJavaScript(js)
+    }
+
+    private func flushPending() async {
+        let cmds = pendingCommands
+        pendingCommands.removeAll()
+        for cmd in cmds {
+            _ = try? await webBridge.webView.evaluateJavaScript(cmd)
+        }
     }
 
     // MARK: - Event handling
@@ -97,7 +119,10 @@ final class PlayerBridge {
     private func handle(_ event: HiddenPlayerWebView.BridgeEvent) {
         switch event {
         case .ready:
-            break
+            if !bridgeReady {
+                bridgeReady = true
+                Task { await flushPending() }
+            }
         case .stateChanged(let playing):
             isPlaying = playing
         case .progress(let t, let d):
