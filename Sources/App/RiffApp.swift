@@ -15,8 +15,12 @@ struct RiffApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("Sign In…") { environment.isSignInSheetPresented = true }
-                    .keyboardShortcut("L", modifiers: [.command, .shift])
+                if environment.isSignedIn {
+                    Button("Sign Out") { environment.signOut() }
+                } else {
+                    Button("Sign In…") { environment.isSignInSheetPresented = true }
+                        .keyboardShortcut("L", modifiers: [.command, .shift])
+                }
             }
         }
     }
@@ -36,7 +40,7 @@ struct RootView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: $env.isSignInSheetPresented) {
-            SignInView()
+            OAuthSignInView()
         }
     }
 }

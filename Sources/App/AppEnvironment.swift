@@ -8,24 +8,38 @@ final class AppEnvironment {
     let player: PlayerBridge
     let nowPlaying: NowPlayingCenter
 
-    /// Inferred from the `SAPISID` cookie set by an in-flight WebView
-    /// session. Recomputed each access; not persisted directly because the
-    /// cookie itself is the source of truth.
-    var isSignedIn: Bool {
-        let names: Set<String> = ["SAPISID", "__Secure-3PAPISID"]
-        return HTTPCookieStorage.shared.cookies?.contains(where: { names.contains($0.name) }) ?? false
+    /// True when an OAuth Device Flow token (or a fallback SAPISID cookie)
+    /// is present. Recomputed via `refreshSignedInState()` on app start
+    /// and after sign-in/out.
+    private(set) var isSignedIn: Bool = false
+
+    func refreshSignedInState() {
+        let hasToken = OAuthTokens.load() != nil
+        let hasCookie = HTTPCookieStorage.shared.cookies?.contains(where: {
+            ["SAPISID", "__Secure-3PAPISID"].contains($0.name)
+        }) ?? false
+        isSignedIn = hasToken || hasCookie
+    }
+
+    /// Sign out clears OAuth tokens + cookies and re-evaluates state.
+    func signOut() {
+        OAuthDeviceFlow.signOut()
+        HTTPCookieStorage.shared.cookies?
+            .filter { $0.domain.contains("youtube.com") || $0.domain.contains("google.com") }
+            .forEach { HTTPCookieStorage.shared.deleteCookie($0) }
+        refreshSignedInState()
     }
 
     /// Drives the manual presentation of the sign-in sheet. Set to true from
     /// the menu bar action or Library empty-state CTA. Sign-in is not
-    /// auto-presented — the app works anonymously by default. See plan
-    /// "Phase E.0 — Anonymous-first sign-in pivot" for context.
+    /// auto-presented — the app works anonymously by default.
     var isSignInSheetPresented: Bool = false
 
     init() {
         self.innerTube = InnerTubeClient()
         self.player = PlayerBridge(innerTube: innerTube)
         self.nowPlaying = NowPlayingCenter(player: player)
+        self.refreshSignedInState()
 
         // Mirror PlayerBridge state into MPNowPlayingInfoCenter on every
         // change. NowPlayingCenter holds a strong ref to player; here we go

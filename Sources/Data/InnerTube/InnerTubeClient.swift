@@ -287,7 +287,14 @@ final class InnerTubeClient: Sendable {
         req.setValue(Self.clientNameID, forHTTPHeaderField: "X-YouTube-Client-Name")
         req.setValue(Self.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         req.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
-        if let auth = Self.sapisidHashAuthHeader() {
+
+        // Prefer the OAuth bearer token (Device Flow path) when available;
+        // fall back to SAPISIDHASH cookies if the user signed in via the
+        // (mostly broken) embedded WebView. Anonymous calls have neither
+        // and Google still serves browse/search.
+        if let bearer = await Self.bearerAuthHeader() {
+            req.setValue(bearer, forHTTPHeaderField: "Authorization")
+        } else if let auth = Self.sapisidHashAuthHeader() {
             req.setValue(auth, forHTTPHeaderField: "Authorization")
         }
 
@@ -311,6 +318,13 @@ final class InnerTubeClient: Sendable {
             throw InnerTubeError.decoding
         }
         return json
+    }
+
+    /// `Bearer <access_token>` if we have a valid OAuth token (or can
+    /// refresh the stored one). Async because refresh hits the network.
+    private static func bearerAuthHeader() async -> String? {
+        guard let token = await OAuthDeviceFlow.refreshIfNeeded() else { return nil }
+        return "Bearer \(token)"
     }
 
     /// SAPISIDHASH `<ts>_<sha1(ts + " " + sapisid + " " + origin)>` per
