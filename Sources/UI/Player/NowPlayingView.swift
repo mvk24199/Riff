@@ -155,7 +155,9 @@ struct NowPlayingView: View {
             // Tab pills along the top of the side pane.
             HStack(spacing: 0) {
                 ForEach(BottomTab.allCases) { t in
-                    Button { bottomTab = t } label: {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { bottomTab = t }
+                    } label: {
                         VStack(spacing: 6) {
                             Text(t.rawValue)
                                 .font(.system(size: 13, weight: bottomTab == t ? .semibold : .regular))
@@ -174,28 +176,28 @@ struct NowPlayingView: View {
 
             // Selected tab content fills remaining height.
             ScrollView {
-                switch bottomTab {
-                case .upNext:  upNextContent
-                case .lyrics:  lyricsContent
-                case .related: relatedContent
+                Group {
+                    switch bottomTab {
+                    case .upNext:  upNextContent
+                    case .lyrics:  lyricsContent
+                    case .related: relatedContent
+                    }
                 }
+                .id(bottomTab)
+                .transition(.opacity)
                 Spacer(minLength: 8)
             }
         }
         .padding(16)
         .frame(maxHeight: .infinity)
-        .background(
-            // Solid base so the pane reads as a distinct surface against
-            // the dark backdrop, not as transparent overlay.
-            ZStack {
-                Color.black.opacity(0.55)
-                Color.white.opacity(0.06)
-            }
-        )
+        // Solid (fully opaque) panel so the hero backdrop never shows
+        // through the pane. Two stacked layers: a near-black base, then
+        // a faint white tint to lift it off pure black.
+        .background(Color(white: 0.10))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
         )
     }
 
