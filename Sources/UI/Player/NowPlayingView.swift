@@ -51,25 +51,32 @@ struct NowPlayingView: View {
             )
             .ignoresSafeArea()
 
-            // Top-level HStack — player on left, pane on right. The HStack
-            // spans the full window thanks to the trailing
-            // .frame(maxWidth: .infinity, maxHeight: .infinity), and divides
-            // its width between leftPlayer (flexible, fills the remainder)
-            // and sidePane (fixed 380pt). Wrapped in a VStack so topBar
-            // sits above both.
-            VStack(spacing: 0) {
-                topBar
-                HStack(spacing: 16) {
-                    leftPlayer
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    sidePane
-                        .frame(width: 380, alignment: .top)
+            // GeometryReader gives us the actual window dimensions so we
+            // can hand-compute leftPlayer's width — guarantees the pane
+            // gets its 380pt regardless of greedy layout behaviour.
+            GeometryReader { geo in
+                let paneWidth: CGFloat = 380
+                let spacing: CGFloat = 16
+                let horizPad: CGFloat = 48  // 24 each side
+                let topBarHeight: CGFloat = 60
+                let leftWidth = max(280, geo.size.width - paneWidth - spacing - horizPad)
+                let bodyHeight = geo.size.height - topBarHeight - 24
+
+                VStack(spacing: 0) {
+                    topBar
+                        .frame(width: geo.size.width, height: topBarHeight)
+
+                    HStack(spacing: spacing) {
+                        leftPlayer
+                            .frame(width: leftWidth, height: bodyHeight)
+                        sidePane
+                            .frame(width: paneWidth, height: bodyHeight)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
