@@ -56,13 +56,16 @@ struct NowPlayingView: View {
 
                 HStack(alignment: .top, spacing: 32) {
                     leftPlayer
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     sidePane
-                        .frame(width: 360)
+                        .frame(width: 360, alignment: .leading)
+                        .layoutPriority(1)  // pane stays at full width even when window stretches
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.horizontal, 32)
                 .padding(.bottom, 24)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
