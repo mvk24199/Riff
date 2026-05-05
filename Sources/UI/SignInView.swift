@@ -78,6 +78,17 @@ private struct SignInWebView: NSViewRepresentable {
 
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 
+    /// Stop any media playing in the sign-in webview *before* it deallocates.
+    /// After Google's continue URL lands on music.youtube.com, the page
+    /// autoplays curated content; if we don't pause it, dismissing the sheet
+    /// leaks the audio (it keeps streaming in parallel with the hidden audio
+    /// engine, producing two-track simultaneous playback).
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        nsView.evaluateJavaScript("document.querySelectorAll('video,audio').forEach(el => el.pause())", completionHandler: nil)
+        nsView.stopLoading()
+        nsView.load(URLRequest(url: URL(string: "about:blank")!))
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(onComplete: onComplete) }
 
     final class Coordinator: NSObject, WKNavigationDelegate {

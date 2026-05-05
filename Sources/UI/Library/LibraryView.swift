@@ -11,7 +11,8 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        @Bindable var env = env
+        NavigationStack(path: $env.libraryNavPath) {
             Group {
                 if env.isSignedIn {
                     signedInView

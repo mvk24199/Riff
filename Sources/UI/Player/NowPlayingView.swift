@@ -159,7 +159,7 @@ struct NowPlayingView: View {
                         VStack(spacing: 6) {
                             Text(t.rawValue)
                                 .font(.system(size: 13, weight: bottomTab == t ? .semibold : .regular))
-                                .foregroundStyle(bottomTab == t ? .white : .white.opacity(0.55))
+                                .foregroundStyle(bottomTab == t ? .white : .white.opacity(0.6))
                             Rectangle()
                                 .fill(bottomTab == t ? Theme.red : Color.clear)
                                 .frame(height: 2)
@@ -170,7 +170,7 @@ struct NowPlayingView: View {
                 }
             }
 
-            Divider().background(Theme.divider)
+            Divider().background(Color.white.opacity(0.15))
 
             // Selected tab content fills remaining height.
             ScrollView {
@@ -179,11 +179,24 @@ struct NowPlayingView: View {
                 case .lyrics:  lyricsContent
                 case .related: relatedContent
                 }
+                Spacer(minLength: 8)
             }
         }
         .padding(16)
-        .background(Color.white.opacity(0.04))
+        .frame(maxHeight: .infinity)
+        .background(
+            // Solid base so the pane reads as a distinct surface against
+            // the dark backdrop, not as transparent overlay.
+            ZStack {
+                Color.black.opacity(0.55)
+                Color.white.opacity(0.06)
+            }
+        )
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
     }
 
     // MARK: - Scrubber

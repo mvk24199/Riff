@@ -6,7 +6,8 @@ struct HomeView: View {
     @State private var loading = true
 
     var body: some View {
-        NavigationStack {
+        @Bindable var env = env
+        NavigationStack(path: $env.homeNavPath) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 32) {
                     if loading && sections.isEmpty {

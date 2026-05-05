@@ -97,7 +97,20 @@ struct TopTabBar: View {
     }
 
     private func tab(_ title: String, _ value: MainTabs.Tab) -> some View {
-        Button(action: { selection = value }) {
+        Button(action: {
+            // Tapping the already-active tab pops its NavigationStack to
+            // the root (so "Home" returns to the home grid even when the
+            // user is deep inside an album/playlist detail page).
+            if selection == value {
+                switch value {
+                case .home:    env.homeNavPath = NavigationPath()
+                case .search:  env.searchNavPath = NavigationPath()
+                case .library: env.libraryNavPath = NavigationPath()
+                }
+            } else {
+                selection = value
+            }
+        }) {
             Text(title)
                 .font(.system(size: 15, weight: selection == value ? .semibold : .regular))
                 .foregroundStyle(selection == value ? .white : .secondary)

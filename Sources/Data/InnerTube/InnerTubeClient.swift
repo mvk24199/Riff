@@ -440,15 +440,18 @@ final class InnerTubeClient: Sendable {
             playablePlaylistId = comps.queryItems?.first(where: { $0.name == "list" })?.value
         }
 
-        // Tracks live in the FIRST list-style shelf inside the section
-        // list (musicShelfRenderer for albums, musicPlaylistShelfRenderer
-        // for playlists). Anything after that is "More from artist" /
-        // "You might also like" carousels which we deliberately exclude
-        // from the tracklist — they're recommendations, not part of the
-        // entity the user opened.
-        let sectionContents = Parsing.array(body, "contents",
+        // Try a couple of section paths since YT Music sometimes uses
+        // singleColumn and sometimes twoColumn layouts for /browse on
+        // album/playlist pages.
+        let singleCol = Parsing.array(body, "contents",
             "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
+        let twoColSecondary = Parsing.array(body, "contents",
+            "twoColumnBrowseResultsRenderer", "secondaryContents",
+            "sectionListRenderer", "contents") ?? []
+        let sectionContents = singleCol.isEmpty ? twoColSecondary : singleCol
+        Log.innertube.debug("detail browseId=\(browseId, privacy: .public) sectionShelves=\(sectionContents.count) shelfKinds=\(sectionContents.compactMap { Array($0.keys).first }, privacy: .public)")
+
         var tracks: [MediaItem] = []
         for shelf in sectionContents {
             if let r = shelf["musicShelfRenderer"] as? [String: Any],
@@ -462,12 +465,14 @@ final class InnerTubeClient: Sendable {
                 break
             }
         }
-        // Final fallback: if no recognised shelf was found at the top
-        // level (e.g. an unusual layout), deep-scan but only as a
-        // last resort.
         if tracks.isEmpty {
             tracks = Self.scanForMediaItems(body)
         }
+        // Final defense-in-depth: an album/playlist tracklist contains
+        // song or episode rows by definition. Anything else (bleed-in
+        // from recommendation carousels) gets filtered out so the page
+        // never shows "Album • Other artist" rows where tracks should be.
+        tracks = tracks.filter { $0.kind == .song || $0.kind == .episode }
         return DetailPage(
             title: title,
             subtitle: subtitle,

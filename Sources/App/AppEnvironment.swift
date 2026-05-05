@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -37,6 +38,13 @@ final class AppEnvironment {
 
     /// Drives the Settings sheet (custom OAuth credentials, sign-out).
     var isSettingsSheetPresented: Bool = false
+
+    /// Per-tab navigation paths. Held here so the TopTabBar can pop a tab
+    /// to its root when the user taps the already-active tab — standard
+    /// "tap home to go home" behaviour.
+    var homeNavPath = NavigationPath()
+    var searchNavPath = NavigationPath()
+    var libraryNavPath = NavigationPath()
 
     init() {
         self.innerTube = InnerTubeClient()

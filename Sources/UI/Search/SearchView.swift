@@ -27,7 +27,8 @@ struct SearchView: View {
     }
 
     var body: some View {
-        NavigationStack { searchContent }
+        @Bindable var env = env
+        NavigationStack(path: $env.searchNavPath) { searchContent }
     }
 
     private var searchContent: some View {
