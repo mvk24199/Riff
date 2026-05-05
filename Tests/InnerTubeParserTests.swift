@@ -1,0 +1,333 @@
+import XCTest
+@testable import Riff
+
+/// Fixture-based tests for `InnerTubeClient`'s renderer-walking parsers.
+///
+/// The fixtures are hand-crafted minimal JSON dictionaries that mimic
+/// the shape YT Music actually returns — small enough to inspect at a
+/// glance, structured enough that a real protocol break (renderer key
+/// rename, navigation-endpoint reshape) trips a test failure.
+///
+/// We test the static parser entrypoints directly (`parseListItem`,
+/// `parseTwoRowItem`, `parseHomeShelf`, `endpointToIdKind`) rather
+/// than going through `URLSession` — there's no value in mocking
+/// the network for tests that exist to detect renderer drift.
+final class InnerTubeParserTests: XCTestCase {
+
+    // MARK: - endpointToIdKind
+
+    func testWatchEndpointMapsToSong() {
+        let endpoint: [String: Any] = ["watchEndpoint": ["videoId": "abc123"]]
+        let resolved = InnerTubeClient.endpointToIdKind(endpoint)
+        XCTAssertEqual(resolved?.0, "abc123")
+        XCTAssertEqual(resolved?.1, .song)
+    }
+
+    func testBrowseEndpointAlbumPageType() {
+        let endpoint: [String: Any] = [
+            "browseEndpoint": [
+                "browseId": "MPREb_test",
+                "browseEndpointContextSupportedConfigs": [
+                    "browseEndpointContextMusicConfig": [
+                        "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                    ]
+                ]
+            ]
+        ]
+        let resolved = InnerTubeClient.endpointToIdKind(endpoint)
+        XCTAssertEqual(resolved?.0, "MPREb_test")
+        XCTAssertEqual(resolved?.1, .album)
+    }
+
+    func testBrowseEndpointArtistPageType() {
+        let endpoint: [String: Any] = [
+            "browseEndpoint": [
+                "browseId": "UC_test",
+                "browseEndpointContextSupportedConfigs": [
+                    "browseEndpointContextMusicConfig": [
+                        "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                    ]
+                ]
+            ]
+        ]
+        let resolved = InnerTubeClient.endpointToIdKind(endpoint)
+        XCTAssertEqual(resolved?.0, "UC_test")
+        XCTAssertEqual(resolved?.1, .artist)
+    }
+
+    /// Playlist browseIds come back as `VL<plid>`. The parser strips
+    /// the VL prefix so the resulting MediaItem.id is the playable id.
+    func testBrowseEndpointPlaylistStripsVLPrefix() {
+        let endpoint: [String: Any] = [
+            "browseEndpoint": [
+                "browseId": "VLPLtest123",
+                "browseEndpointContextSupportedConfigs": [
+                    "browseEndpointContextMusicConfig": [
+                        "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                    ]
+                ]
+            ]
+        ]
+        let resolved = InnerTubeClient.endpointToIdKind(endpoint)
+        XCTAssertEqual(resolved?.0, "PLtest123")
+        XCTAssertEqual(resolved?.1, .playlist)
+    }
+
+    /// Heuristic fallback when YT omits the pageType — id-prefix sniff.
+    func testBrowseEndpointFallsBackToIdPrefix() {
+        let endpoint: [String: Any] = [
+            "browseEndpoint": ["browseId": "MPREb_xyz"]
+        ]
+        let resolved = InnerTubeClient.endpointToIdKind(endpoint)
+        XCTAssertEqual(resolved?.0, "MPREb_xyz")
+        XCTAssertEqual(resolved?.1, .album)
+    }
+
+    func testNilEndpointReturnsNil() {
+        XCTAssertNil(InnerTubeClient.endpointToIdKind(nil))
+        XCTAssertNil(InnerTubeClient.endpointToIdKind([:]))
+    }
+
+    // MARK: - parseListItem (search / library row)
+
+    func testParseListItemSongRow() {
+        let row: [String: Any] = [
+            "musicResponsiveListItemRenderer": [
+                "flexColumns": [
+                    [
+                        "musicResponsiveListItemFlexColumnRenderer": [
+                            "text": [
+                                "runs": [[
+                                    "text": "Hello",
+                                    "navigationEndpoint": [
+                                        "watchEndpoint": ["videoId": "song123"]
+                                    ]
+                                ]]
+                            ]
+                        ]
+                    ],
+                    [
+                        "musicResponsiveListItemFlexColumnRenderer": [
+                            "text": [
+                                "runs": [
+                                    [
+                                        "text": "Adele",
+                                        "navigationEndpoint": [
+                                            "browseEndpoint": [
+                                                "browseId": "UCadele",
+                                                "browseEndpointContextSupportedConfigs": [
+                                                    "browseEndpointContextMusicConfig": [
+                                                        "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                                    ]
+                                                ]
+                                            ]
+                                        ]
+                                    ],
+                                    ["text": " • "],
+                                    [
+                                        "text": "25",
+                                        "navigationEndpoint": [
+                                            "browseEndpoint": [
+                                                "browseId": "MPREb_25",
+                                                "browseEndpointContextSupportedConfigs": [
+                                                    "browseEndpointContextMusicConfig": [
+                                                        "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                                                    ]
+                                                ]
+                                            ]
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let item = InnerTubeClient.parseListItem(row)
+        XCTAssertEqual(item?.id, "song123")
+        XCTAssertEqual(item?.kind, .song)
+        XCTAssertEqual(item?.title, "Hello")
+        XCTAssertEqual(item?.artistId, "UCadele",
+            "Artist run's browseId should be lifted into MediaItem.artistId")
+        XCTAssertEqual(item?.albumId, "MPREb_25",
+            "Album run's browseId should be lifted into MediaItem.albumId")
+    }
+
+    /// "Go to album / Go to artist" only show up on context menus when
+    /// the parser surfaced these IDs, so this is the high-signal test
+    /// that protects that whole feature.
+    func testParseListItemMissingFlexColumnEndpointsFallsBackToMenu() {
+        let row: [String: Any] = [
+            "musicResponsiveListItemRenderer": [
+                "flexColumns": [
+                    [
+                        "musicResponsiveListItemFlexColumnRenderer": [
+                            "text": [
+                                "runs": [[
+                                    "text": "Some Song",
+                                    "navigationEndpoint": [
+                                        "watchEndpoint": ["videoId": "vidx"]
+                                    ]
+                                ]]
+                            ]
+                        ]
+                    ]
+                ],
+                "menu": [
+                    "menuRenderer": [
+                        "items": [
+                            [
+                                "menuNavigationItemRenderer": [
+                                    "navigationEndpoint": [
+                                        "browseEndpoint": [
+                                            "browseId": "UCfromMenu",
+                                            "browseEndpointContextSupportedConfigs": [
+                                                "browseEndpointContextMusicConfig": [
+                                                    "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                                ]
+                                            ]
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let item = InnerTubeClient.parseListItem(row)
+        XCTAssertEqual(item?.artistId, "UCfromMenu",
+            "Menu fallback must pick up artist when flexColumns don't")
+    }
+
+    // MARK: - parseTwoRowItem (carousel tile)
+
+    func testParseTwoRowItemTileWithSubtitleEndpoints() {
+        let tile: [String: Any] = [
+            "musicTwoRowItemRenderer": [
+                "title": ["runs": [["text": "Levitating"]]],
+                "subtitle": [
+                    "runs": [
+                        [
+                            "text": "Dua Lipa",
+                            "navigationEndpoint": [
+                                "browseEndpoint": [
+                                    "browseId": "UCdua",
+                                    "browseEndpointContextSupportedConfigs": [
+                                        "browseEndpointContextMusicConfig": [
+                                            "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ],
+                        ["text": " • "],
+                        [
+                            "text": "Future Nostalgia",
+                            "navigationEndpoint": [
+                                "browseEndpoint": [
+                                    "browseId": "MPREb_fn",
+                                    "browseEndpointContextSupportedConfigs": [
+                                        "browseEndpointContextMusicConfig": [
+                                            "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ],
+                "navigationEndpoint": ["watchEndpoint": ["videoId": "lev123"]]
+            ]
+        ]
+        let item = InnerTubeClient.parseTwoRowItem(tile)
+        XCTAssertEqual(item?.id, "lev123")
+        XCTAssertEqual(item?.kind, .song)
+        XCTAssertEqual(item?.title, "Levitating")
+        XCTAssertEqual(item?.subtitle, "Dua Lipa • Future Nostalgia")
+        XCTAssertEqual(item?.artistId, "UCdua")
+        XCTAssertEqual(item?.albumId, "MPREb_fn")
+    }
+
+    func testParseTwoRowItemReturnsNilOnMissingNavigation() {
+        let tile: [String: Any] = [
+            "musicTwoRowItemRenderer": [
+                "title": ["runs": [["text": "Untitled"]]]
+                // no navigationEndpoint at all
+            ]
+        ]
+        XCTAssertNil(InnerTubeClient.parseTwoRowItem(tile),
+            "Tiles without a navigation endpoint can't be played or opened, so the parser should drop them rather than returning a half-broken MediaItem")
+    }
+
+    // MARK: - parseHomeShelf
+
+    func testParseHomeShelfCarouselWithTitle() {
+        let shelf: [String: Any] = [
+            "musicCarouselShelfRenderer": [
+                "header": [
+                    "musicCarouselShelfBasicHeaderRenderer": [
+                        "title": ["runs": [["text": "Listen Again"]]]
+                    ]
+                ],
+                "contents": [
+                    [
+                        "musicTwoRowItemRenderer": [
+                            "title": ["runs": [["text": "Track A"]]],
+                            "subtitle": ["runs": [["text": "Artist A"]]],
+                            "navigationEndpoint": ["watchEndpoint": ["videoId": "a1"]]
+                        ]
+                    ],
+                    [
+                        "musicTwoRowItemRenderer": [
+                            "title": ["runs": [["text": "Track B"]]],
+                            "subtitle": ["runs": [["text": "Artist B"]]],
+                            "navigationEndpoint": ["watchEndpoint": ["videoId": "b1"]]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let section = InnerTubeClient.parseHomeShelf(shelf)
+        XCTAssertEqual(section?.title, "Listen Again")
+        XCTAssertEqual(section?.items.count, 2)
+        XCTAssertEqual(section?.items.first?.id, "a1")
+        XCTAssertEqual(section?.items.last?.id, "b1")
+    }
+
+    func testParseHomeShelfDropsEmpty() {
+        let shelf: [String: Any] = [
+            "musicCarouselShelfRenderer": [
+                "header": [
+                    "musicCarouselShelfBasicHeaderRenderer": [
+                        "title": ["runs": [["text": "Empty Rail"]]]
+                    ]
+                ],
+                "contents": []
+            ]
+        ]
+        XCTAssertNil(InnerTubeClient.parseHomeShelf(shelf),
+            "Shelves with no parsable items must be dropped — otherwise empty rails leak into Home")
+    }
+
+    // MARK: - MediaItem Codable round-trip
+
+    /// Played-history persistence relies on this. If MediaItem ever
+    /// gains a non-Codable field, this catches it before users lose
+    /// their history on next launch.
+    func testMediaItemCodableRoundTrip() throws {
+        let item = MediaItem(
+            id: "vid",
+            kind: .song,
+            title: "Song",
+            subtitle: "Artist",
+            thumbnailURL: URL(string: "https://example.com/a.jpg"),
+            albumId: "MPREb",
+            artistId: "UC"
+        )
+        let data = try JSONEncoder().encode(item)
+        let decoded = try JSONDecoder().decode(MediaItem.self, from: data)
+        XCTAssertEqual(item, decoded)
+    }
+}

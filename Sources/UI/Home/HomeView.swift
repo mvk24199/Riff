@@ -4,6 +4,7 @@ struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var sections: [HomeSection] = []
     @State private var loading = true
+    @State private var errorMessage: String?
 
     var body: some View {
         @Bindable var env = env
@@ -12,6 +13,11 @@ struct HomeView: View {
                 LazyVStack(alignment: .leading, spacing: 32) {
                     GreetingHeader()
                         .padding(.bottom, 4)
+                    if let errorMessage {
+                        ErrorBanner(message: errorMessage) {
+                            Task { await load() }
+                        }
+                    }
                     if loading && sections.isEmpty {
                         HomeSkeleton()
                     } else {
@@ -34,13 +40,16 @@ struct HomeView: View {
         defer { loading = false }
         do {
             sections = try await env.innerTube.browseHome()
+            errorMessage = nil
         } catch {
-            sections = []
+            errorMessage = LoadErrorPresenter.message(for: error, env: env)
+            // Keep stale sections visible (if any) so the user can still
+            // interact with them while the banner indicates the failure.
         }
     }
 }
 
-struct HomeSection: Identifiable, Hashable {
+struct HomeSection: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
     let items: [MediaItem]

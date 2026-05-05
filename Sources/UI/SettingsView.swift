@@ -17,6 +17,10 @@ struct SettingsView: View {
     @State private var clientId: String = ""
     @State private var clientSecret: String = ""
     @State private var saved = false
+    /// Email of the signed-in Google account, when we can fetch it
+    /// (Device-Flow path only — see UserInfoService for the rationale).
+    /// Nil while loading or for cookie-based sessions.
+    @State private var accountEmail: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +57,15 @@ struct SettingsView: View {
                 clientSecret = config.clientSecret
             }
         }
+        .task {
+            // Best-effort fetch on open; fails silently when the user
+            // came in via cookie-only sign-in (no bearer to call
+            // userinfo with). Cached so reopening Settings doesn't
+            // re-hit the network.
+            if env.isSignedIn {
+                accountEmail = await UserInfoService.emailIfAvailable()
+            }
+        }
     }
 
     // MARK: - Sections
@@ -72,6 +85,15 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(env.isSignedIn ? "Signed in to YouTube Music" : "Not signed in")
                         .font(.system(size: 13, weight: .semibold))
+                    if let email = accountEmail, env.isSignedIn {
+                        // Real account email — only available when the
+                        // user came in via OAuth Device Flow. Cookie
+                        // sessions skip this.
+                        Text(email)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .textSelection(.enabled)
+                    }
                     Text(env.isSignedIn
                          ? "Library + personalized recommendations are available."
                          : "Anonymous browse + click-to-play work; sign in for Library access.")
@@ -81,6 +103,7 @@ struct SettingsView: View {
                 Spacer()
                 if env.isSignedIn {
                     Button("Sign Out") {
+                        UserInfoService.cachedEmail = nil
                         env.signOut()
                         dismiss()
                     }
@@ -100,9 +123,17 @@ struct SettingsView: View {
     private var keyboardShortcutsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("Keyboard shortcuts")
-            shortcutRow("Sign in",         keys: "⇧ ⌘ L")
-            shortcutRow("Settings",        keys: "⌘ ,")
+            shortcutRow("Play / Pause",    keys: "Space")
+            shortcutRow("Next track",      keys: "⌘ →")
+            shortcutRow("Previous track",  keys: "⌘ ←")
+            shortcutRow("Skip +30s",       keys: "⌥ ⌘ →")
+            shortcutRow("Skip −15s",       keys: "⌥ ⌘ ←")
+            shortcutRow("Volume up",       keys: "⌘ ↑")
+            shortcutRow("Volume down",     keys: "⌘ ↓")
+            shortcutRow("Toggle like",     keys: "⌘ L")
+            shortcutRow("Switch tabs",     keys: "⌘ 1 / 2 / 3")
             shortcutRow("Mini Player",     keys: "⌥ ⌘ M")
+            shortcutRow("Settings",        keys: "⌘ ,")
             shortcutRow("Close player",    keys: "⎋")
             shortcutRow("Quit",            keys: "⌘ Q")
         }

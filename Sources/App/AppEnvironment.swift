@@ -2,6 +2,13 @@ import Foundation
 import Observation
 import SwiftUI
 
+/// Top-level tab identifier. Lifted out of `MainTabs` so the app-level
+/// `CommandGroup` (which doesn't see private nested types) can bind ⌘1/2/3
+/// shortcuts to switch tabs.
+enum AppTab: Hashable {
+    case home, search, library
+}
+
 @MainActor
 @Observable
 final class AppEnvironment {
@@ -49,6 +56,41 @@ final class AppEnvironment {
     var searchNavPath = NavigationPath()
     var libraryNavPath = NavigationPath()
 
+    /// Currently-active main tab. Lifted out of MainTabs so the app-level
+    /// CommandGroup can drive it via ⌘1 / ⌘2 / ⌘3 keyboard shortcuts.
+    var activeTab: AppTab = .home
+
+    /// Navigate to a media item's detail page, regardless of where the
+    /// caller is. Closes the full-screen Now Playing overlay (so the
+    /// destination is actually visible) and pushes the item onto the
+    /// active tab's NavigationStack. Used by "Go to album" / "Go to
+    /// artist" context-menu actions, including from the player itself.
+    func navigate(to item: MediaItem) {
+        if player.isFullPlayerOpen {
+            player.isFullPlayerOpen = false
+        }
+        switch activeTab {
+        case .home:    homeNavPath.append(item)
+        case .search:  searchNavPath.append(item)
+        case .library: libraryNavPath.append(item)
+        }
+    }
+
+    /// Convenience: navigate to an album / artist by its browseId,
+    /// synthesizing a minimal `MediaItem`. Used when we have only the
+    /// id (e.g. from a now-playing track's `albumId`) and not a full
+    /// item to push.
+    func navigateToBrowseId(_ id: String, kind: MediaItem.Kind, fallbackTitle: String = "") {
+        let item = MediaItem(
+            id: id,
+            kind: kind,
+            title: fallbackTitle,
+            subtitle: "",
+            thumbnailURL: nil
+        )
+        navigate(to: item)
+    }
+
     /// Cached user-owned playlists for "Add to Playlist" menus. Loaded on
     /// demand when a UI surface needs them; refreshed whenever the user
     /// signs in/out.
@@ -76,6 +118,11 @@ final class AppEnvironment {
         self.player = PlayerBridge(innerTube: innerTube)
         self.nowPlaying = NowPlayingCenter(player: player)
         self.refreshSignedInState()
+        // Subscribe to MetricKit on launch — Apple's built-in crash /
+        // hang / perf reporter. Payloads land daily under
+        // ~/Library/Application Support/Riff/diagnostics/. No network
+        // exfiltration; user shares manually if asked.
+        DiagnosticsCenter.shared.start()
 
         // Mirror PlayerBridge state into MPNowPlayingInfoCenter on every
         // change. NowPlayingCenter holds a strong ref to player; here we go

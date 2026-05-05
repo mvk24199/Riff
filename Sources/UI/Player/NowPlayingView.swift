@@ -19,11 +19,19 @@ struct NowPlayingView: View {
         var id: String { rawValue }
     }
 
+    /// Mirrors YT Music's "Tune" popover, simplified to the dimensions we
+    /// can actually source data for. The full YT-Music feature uses a
+    /// continuous Familiar↔Discover slider + mood chips, both routed
+    /// through protobuf-encoded `/next` params tokens that aren't
+    /// publicly documented. Until those tokens are reverse-engineered,
+    /// these three modes give the user something real:
+    ///
+    ///   - Related: the default radio queue from `/next`.
+    ///   - Discover: the related-songs endpoint (broader artists).
+    ///   - Familiar: radio queue filtered to artists already in playedHistory.
     enum QueueMode: String, CaseIterable, Identifiable {
         case related = "Related"
         case discover = "Discover"
-        case deepCuts = "Deep cuts"
-        case upbeat = "Upbeat"
         case familiar = "Familiar"
         var id: String { rawValue }
     }
@@ -73,6 +81,12 @@ struct NowPlayingView: View {
         .onChange(of: bottomTab) { _, newTab in
             if newTab == .lyrics { env.player.loadLyricsIfNeeded() }
             if newTab == .related { env.player.loadRelatedIfNeeded() }
+        }
+        .onChange(of: queueMode) { _, mode in
+            // "Discover" reuses the same `related` field that the Related
+            // top-tab populates — fetch lazily on first selection so we
+            // don't pay the cost when the user only ever uses Related.
+            if mode == .discover { env.player.loadRelatedIfNeeded() }
         }
     }
 
@@ -127,6 +141,7 @@ struct NowPlayingView: View {
             .frame(width: 320, height: 320)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
+            .contextMenu { nowPlayingMenuItems }
 
             VStack(spacing: 4) {
                 Text(track?.title ?? "—")
@@ -140,6 +155,7 @@ struct NowPlayingView: View {
                     .lineLimit(1)
             }
             .padding(.horizontal, 32)
+            .contextMenu { nowPlayingMenuItems }
 
             scrubber
                 .frame(maxWidth: 480)
@@ -275,6 +291,46 @@ struct NowPlayingView: View {
             }
             playbackRateMenu
             addToPlaylistMenu
+            moreMenu
+        }
+    }
+
+    /// "More" (•••) menu — surfaces Go to album / Go to artist / Start
+    /// radio for the currently playing track without requiring the user
+    /// to right-click. Mirrors YT Music's track-overflow affordance.
+    private var moreMenu: some View {
+        Menu {
+            nowPlayingMenuItems
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: 36, height: 40)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 36, height: 40)
+        .disabled(env.player.currentTrack == nil)
+    }
+
+    /// Reusable menu builder for the currently-playing track. Synthesizes
+    /// a MediaItem from PlayerBridge.Track so we can defer to the shared
+    /// TrackContextMenu component (Start radio / Play next / Add to queue
+    /// / Go to album / Go to artist / Add to playlist).
+    @ViewBuilder
+    private var nowPlayingMenuItems: some View {
+        if let track = env.player.currentTrack {
+            let item = MediaItem(
+                id: track.videoId,
+                kind: .song,
+                title: track.title,
+                subtitle: track.subtitle,
+                thumbnailURL: track.thumbnailURL,
+                albumId: track.albumId,
+                artistId: track.artistId
+            )
+            TrackContextMenu(item: item, omitPrimaryPlay: true)
         }
     }
 
@@ -368,22 +424,43 @@ struct NowPlayingView: View {
 
     // MARK: - Tab content
 
+    @State private var tunePopoverOpen: Bool = false
+
     private var upNextContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(QueueMode.allCases) { mode in
-                        Button { queueMode = mode } label: {
-                            Text(mode.rawValue)
-                                .font(.system(size: 11, weight: .semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(queueMode == mode ? Theme.red : Color.white.opacity(0.06))
-                                .foregroundStyle(queueMode == mode ? .white : .white.opacity(0.85))
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
+            // Header row: queue mode label on the left, "Tune" affordance
+            // on the right — mirrors YT Music's popover-driven pattern
+            // instead of always-visible mode pills.
+            HStack(spacing: 6) {
+                Text(queueModeHeader)
+                    .font(.system(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(1.2)
+                    .foregroundStyle(.white.opacity(0.55))
+                Spacer()
+                Button {
+                    tunePopoverOpen = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Tune")
+                            .font(.system(size: 11, weight: .semibold))
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.06))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $tunePopoverOpen, arrowEdge: .top) {
+                    TunePopover(
+                        chips: env.player.availableChips,
+                        selectedChipId: env.player.selectedChipId,
+                        onSelectChip: { chip in env.player.applyChip(chip) },
+                        fallbackSelection: $queueMode
+                    )
                 }
             }
 
@@ -391,14 +468,19 @@ struct NowPlayingView: View {
             // above (faded), upcoming below. Both lists exclude the
             // currently-playing videoId so it never appears twice — going
             // back to a previously-played track was making it show in both
-            // sections.
+            // sections. The "upcoming" list source switches based on the
+            // selected mode pill (see QueueMode docs).
             let currentId = env.player.currentTrack?.videoId
             let history = env.player.playedHistory.filter { $0.id != currentId }
-            let upcoming = env.player.upNext.filter { $0.id != currentId }
+            let upcoming = upcomingList(currentId: currentId)
             if history.isEmpty && upcoming.isEmpty {
-                emptyHint("Queue empty.")
+                emptyHint(emptyHintText)
             } else {
-                if !history.isEmpty {
+                if !history.isEmpty, isDefaultLens {
+                    // Recently played only makes sense in the default
+                    // (Related / "All") lens — it's a chronological log
+                    // of THIS session, not part of a tuned variant's
+                    // curation.
                     Text("Recently played")
                         .font(.system(size: 10, weight: .semibold))
                         .textCase(.uppercase)
@@ -410,7 +492,7 @@ struct NowPlayingView: View {
                         .padding(.vertical, 4)
                 }
                 if !upcoming.isEmpty {
-                    Text("Up next")
+                    Text(upcomingHeader)
                         .font(.system(size: 10, weight: .semibold))
                         .textCase(.uppercase)
                         .tracking(1.2)
@@ -419,6 +501,84 @@ struct NowPlayingView: View {
                     queueList(upcoming, faded: false)
                 }
             }
+        }
+    }
+
+    /// Returns the upcoming list excluding the currently-playing track.
+    /// When YT served a chip cloud, `upNext` already reflects whichever
+    /// chip is active (PlayerBridge.applyChip re-fetches /next on chip
+    /// selection), so we just hand back upNext. Without chips we fall
+    /// back to the local QueueMode lenses.
+    private func upcomingList(currentId: String?) -> [MediaItem] {
+        if !env.player.availableChips.isEmpty {
+            return env.player.upNext.filter { $0.id != currentId }
+        }
+        switch queueMode {
+        case .related:
+            return env.player.upNext.filter { $0.id != currentId }
+        case .discover:
+            return env.player.related.filter { $0.id != currentId }
+        case .familiar:
+            // Build the set of artist names heard earlier in this session
+            // and intersect with the radio queue. Case-insensitive so
+            // "Bruno Mars" and "bruno mars" still match. Empty when the
+            // user hasn't played anything yet — handled by the empty-hint
+            // text below.
+            let known = Set(env.player.playedHistory.map { $0.subtitle.lowercased() })
+            return env.player.upNext.filter {
+                $0.id != currentId && known.contains($0.subtitle.lowercased())
+            }
+        }
+    }
+
+    /// Section header shown above the upcoming list. "Up next" by default;
+    /// the modes get their own labels so the user can tell at a glance
+    /// which lens they're looking at.
+    private var upcomingHeader: String {
+        switch queueMode {
+        case .related:  return "Up next"
+        case .discover: return "More like this"
+        case .familiar: return "From artists you've played"
+        }
+    }
+
+    /// Top-of-pane label shown left of the Tune button. When YT served a
+    /// chip cloud and one is selected, show that chip's label (e.g.
+    /// "Discover" / "Telugu" / "2010s"). Otherwise fall back to the
+    /// local QueueMode label.
+    private var queueModeHeader: String {
+        if let id = env.player.selectedChipId,
+           let chip = env.player.availableChips.first(where: { $0.id == id }) {
+            // "All" reads as just "Up next" to keep the default state quiet.
+            return chip.id == "All" ? "Up next" : chip.label
+        }
+        switch queueMode {
+        case .related:  return "Up next"
+        case .discover: return "Discover"
+        case .familiar: return "Familiar"
+        }
+    }
+
+    /// True when we're in the default (untuned) lens — either YT's "All"
+    /// chip is active, or no chips are available and the local mode is
+    /// `.related`. Drives the "Recently played" gate.
+    private var isDefaultLens: Bool {
+        if !env.player.availableChips.isEmpty {
+            return (env.player.selectedChipId ?? "All") == "All"
+        }
+        return queueMode == .related
+    }
+
+    /// Empty-state text varies by mode so we explain *why* nothing's
+    /// here rather than a generic "Queue empty".
+    private var emptyHintText: String {
+        switch queueMode {
+        case .related:
+            return "Queue empty."
+        case .discover:
+            return "No discoveries yet — try again in a moment."
+        case .familiar:
+            return "Play a few tracks first so we know what's familiar."
         }
     }
 
@@ -466,6 +626,7 @@ struct NowPlayingView: View {
                             Color.white.opacity(0.4)
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
                         .id(line.id)
                 }
             }
@@ -514,13 +675,16 @@ struct NowPlayingView: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
-                    Button("Play") { Task { await env.player.play(item: item) } }
+                    // Full track menu plus queue-specific reorder/remove
+                    // operations underneath. omitPrimaryPlay because the
+                    // row's tap already plays it; keep "Start radio" so
+                    // the user can break out of the current queue.
+                    TrackContextMenu(item: item, omitPrimaryPlay: true)
                     Divider()
                     Button("Move Up") { env.player.moveInQueue(videoId: item.id, by: -1) }
                         .disabled(isCurrent)
                     Button("Move Down") { env.player.moveInQueue(videoId: item.id, by: 1) }
                         .disabled(isCurrent)
-                    Divider()
                     Button("Remove from Queue") {
                         Task { await env.player.removeFromQueue(videoId: item.id) }
                     }
@@ -609,5 +773,204 @@ private struct ScrubberSlider: View {
             )
         }
         .frame(height: 18)
+    }
+}
+
+// MARK: - Tune popover
+
+/// Popover that mirrors YT Music's "Tune your queue" affordance. Shown
+/// when the user taps the Tune button at the top of the Up Next pane.
+///
+/// Two display modes:
+///
+/// 1. **Real chips** — when YT served a `subHeaderChipCloud` for the
+///    current watch context (typical for radio queues), we render
+///    every chip the server gave us. Tapping a chip re-issues `/next`
+///    with that chip's protobuf-encoded `(playlistId, params)` and
+///    refreshes Up Next with the resulting variant. This is exactly
+///    what music.youtube.com does on the web.
+///
+/// 2. **Local fallback** — when no chip cloud was returned (e.g. on
+///    explicit playlists or podcasts where YT doesn't offer a Tune
+///    affordance), fall back to a 3-position picker driven entirely
+///    by data Riff already has: All / Discover (related endpoint) /
+///    Familiar (history-filtered radio queue). Less rich than YT's
+///    chips but better than nothing.
+private struct TunePopover: View {
+    let chips: [InnerTubeClient.QueueChip]
+    let selectedChipId: String?
+    let onSelectChip: (InnerTubeClient.QueueChip) -> Void
+    @Binding var fallbackSelection: NowPlayingView.QueueMode
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            Divider().background(Color.white.opacity(0.1))
+            if chips.isEmpty {
+                fallbackSection
+            } else {
+                chipsSection
+            }
+        }
+        .padding(18)
+        .frame(width: 320)
+        .background(.regularMaterial)
+        .preferredColorScheme(.dark)
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Tune your queue")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+            Spacer()
+            Button("Done") { dismiss() }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.red)
+        }
+    }
+
+    /// Real YT-served chips. We don't try to bucket them into
+    /// "familiarity" vs "mood" sections — YT itself renders them as a
+    /// single flat cloud, with "All" first and the rest in whatever
+    /// order the server chose (the order encodes locality / language
+    /// signals we shouldn't second-guess).
+    private var chipsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Variant")
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.55))
+            FlowLayout(spacing: 6) {
+                ForEach(chips) { chip in
+                    let isSelected = (selectedChipId ?? chips.first(where: \.isSelected)?.id) == chip.id
+                    Button {
+                        onSelectChip(chip)
+                    } label: {
+                        Text(chip.label)
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(isSelected ? Theme.red : Color.white.opacity(0.06))
+                            .foregroundStyle(isSelected ? .white : .white.opacity(0.85))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("Tap a chip to retune the queue. The currently-playing track keeps playing.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Local 3-position picker — used when YT didn't serve a chip cloud.
+    /// Order goes Familiar → Mix → Discover so it reads as a continuum.
+    private var fallbackSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Familiarity")
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.55))
+            HStack(spacing: 6) {
+                ForEach(NowPlayingView.QueueMode.allCases) { mode in
+                    Button {
+                        fallbackSelection = mode
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: icon(for: mode))
+                                .font(.system(size: 13, weight: .semibold))
+                            Text(label(for: mode))
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(fallbackSelection == mode ? Theme.red : Color.white.opacity(0.06))
+                        .foregroundStyle(fallbackSelection == mode ? .white : .white.opacity(0.85))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text(description(for: fallbackSelection))
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Fallback metadata
+
+    private func icon(for mode: NowPlayingView.QueueMode) -> String {
+        switch mode {
+        case .familiar: return "person.crop.circle.badge.checkmark"
+        case .related:  return "music.note.list"
+        case .discover: return "sparkles"
+        }
+    }
+
+    private func label(for mode: NowPlayingView.QueueMode) -> String {
+        switch mode {
+        case .familiar: return "Familiar"
+        case .related:  return "Mix"
+        case .discover: return "Discover"
+        }
+    }
+
+    private func description(for mode: NowPlayingView.QueueMode) -> String {
+        switch mode {
+        case .familiar:
+            return "Only show tracks by artists you've already played this session."
+        case .related:
+            return "The default radio queue — a balanced mix anchored on the current track."
+        case .discover:
+            return "Lean into broader, less-familiar recommendations."
+        }
+    }
+}
+
+/// Lightweight flow layout — wraps chips onto multiple rows when they
+/// don't fit horizontally. Used by the mood chips above.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for sv in subviews {
+            let size = sv.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: maxWidth.isFinite ? maxWidth : x, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+        for sv in subviews {
+            let size = sv.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            sv.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

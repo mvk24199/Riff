@@ -14,7 +14,16 @@ import CryptoKit
 /// Stability notes: every endpoint we depend on has a snapshot fixture in
 /// tests. A nightly CI job hits live endpoints with a sentinel account to
 /// surface Google-side breakage early.
-final class InnerTubeClient: Sendable {
+/// `@unchecked Sendable`: the type itself is safe to share across actors —
+/// `URLSession` is Sendable, our only mutable state is via the session, and we
+/// never mutate the constants. But several internal methods accept/return
+/// `[String: Any]` (raw decoded JSON) which is *not* Sendable under Swift 6
+/// strict concurrency. Wrapping every InnerTube response in a typed Sendable
+/// shell would balloon this file; we accept the unchecked annotation here and
+/// keep the unsafe-bridge confined to method internals (no `[String: Any]`
+/// crosses an actor boundary in the public API — only typed `MediaItem`,
+/// `HomeSection`, etc. do).
+final class InnerTubeClient: @unchecked Sendable {
     static let baseURL = URL(string: "https://music.youtube.com/youtubei/v1/")!
     static let origin = "https://music.youtube.com"
 
@@ -203,60 +212,91 @@ final class InnerTubeClient: Sendable {
 
     private static let dataAPIBase = URL(string: "https://www.googleapis.com/youtube/v3/")!
 
+    /// Hard cap on Data-API pagination. 50 per page × 8 pages = 400 items —
+    /// enough headroom for power users without runaway requests on accounts
+    /// with thousands of subscriptions.
+    private static let dataAPIMaxPages = 8
+
+    /// Walk Data API v3 pages via `pageToken` until exhausted or until the
+    /// safety cap. Each yielded page is the raw response dict.
+    private func dataAPIPaginated(_ path: String, params: [String: String]) async throws -> [[String: Any]] {
+        var pages: [[String: Any]] = []
+        var nextPageToken: String? = nil
+        var iterations = 0
+        repeat {
+            var perPage = params
+            if let tok = nextPageToken { perPage["pageToken"] = tok }
+            let resp = try await dataAPI(path, params: perPage)
+            pages.append(resp)
+            nextPageToken = (resp["nextPageToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            iterations += 1
+        } while nextPageToken != nil && iterations < Self.dataAPIMaxPages
+        if nextPageToken != nil {
+            Log.innertube.debug("dataAPI(\(path, privacy: .public)) hit page cap (\(Self.dataAPIMaxPages)); more available")
+        }
+        return pages
+    }
+
     /// `playlistItems?playlistId=LL` — "LL" is YouTube's special ID for the
     /// signed-in user's Liked Videos playlist.
     private func likedVideos() async throws -> [MediaItem] {
-        let resp = try await dataAPI("playlistItems", params: [
+        let pages = try await dataAPIPaginated("playlistItems", params: [
             "playlistId": "LL",
             "part": "snippet,contentDetails",
             "maxResults": "50",
         ])
-        let items = (resp["items"] as? [[String: Any]]) ?? []
-        return items.compactMap { item -> MediaItem? in
-            let snippet = item["snippet"] as? [String: Any]
-            let videoId = (item["contentDetails"] as? [String: Any])?["videoId"] as? String
-                ?? (snippet?["resourceId"] as? [String: Any])?["videoId"] as? String
-            guard let videoId else { return nil }
-            let title = snippet?["title"] as? String ?? ""
-            let artist = snippet?["videoOwnerChannelTitle"] as? String
-                ?? snippet?["channelTitle"] as? String ?? ""
-            let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
-            return MediaItem(id: videoId, kind: .song, title: title, subtitle: artist, thumbnailURL: thumb)
+        return pages.flatMap { resp -> [MediaItem] in
+            let items = (resp["items"] as? [[String: Any]]) ?? []
+            return items.compactMap { item -> MediaItem? in
+                let snippet = item["snippet"] as? [String: Any]
+                let videoId = (item["contentDetails"] as? [String: Any])?["videoId"] as? String
+                    ?? (snippet?["resourceId"] as? [String: Any])?["videoId"] as? String
+                guard let videoId else { return nil }
+                let title = snippet?["title"] as? String ?? ""
+                let artist = snippet?["videoOwnerChannelTitle"] as? String
+                    ?? snippet?["channelTitle"] as? String ?? ""
+                let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
+                return MediaItem(id: videoId, kind: .song, title: title, subtitle: artist, thumbnailURL: thumb)
+            }
         }
     }
 
     private func myPlaylists() async throws -> [MediaItem] {
-        let resp = try await dataAPI("playlists", params: [
+        let pages = try await dataAPIPaginated("playlists", params: [
             "mine": "true",
             "part": "snippet,contentDetails",
             "maxResults": "50",
         ])
-        let items = (resp["items"] as? [[String: Any]]) ?? []
-        return items.compactMap { item -> MediaItem? in
-            guard let id = item["id"] as? String else { return nil }
-            let snippet = item["snippet"] as? [String: Any]
-            let title = snippet?["title"] as? String ?? ""
-            let count = (item["contentDetails"] as? [String: Any])?["itemCount"] as? Int ?? 0
-            let subtitle = count > 0 ? "\(count) tracks" : (snippet?["channelTitle"] as? String ?? "")
-            let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
-            return MediaItem(id: id, kind: .playlist, title: title, subtitle: subtitle, thumbnailURL: thumb)
+        return pages.flatMap { resp -> [MediaItem] in
+            let items = (resp["items"] as? [[String: Any]]) ?? []
+            return items.compactMap { item -> MediaItem? in
+                guard let id = item["id"] as? String else { return nil }
+                let snippet = item["snippet"] as? [String: Any]
+                let title = snippet?["title"] as? String ?? ""
+                let count = (item["contentDetails"] as? [String: Any])?["itemCount"] as? Int ?? 0
+                let subtitle = count > 0 ? "\(count) tracks" : (snippet?["channelTitle"] as? String ?? "")
+                let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
+                return MediaItem(id: id, kind: .playlist, title: title, subtitle: subtitle, thumbnailURL: thumb)
+            }
         }
     }
 
     private func mySubscriptions() async throws -> [MediaItem] {
-        let resp = try await dataAPI("subscriptions", params: [
+        let pages = try await dataAPIPaginated("subscriptions", params: [
             "mine": "true",
             "part": "snippet",
             "maxResults": "50",
         ])
-        let items = (resp["items"] as? [[String: Any]]) ?? []
-        return items.compactMap { item -> MediaItem? in
-            let snippet = item["snippet"] as? [String: Any]
-            let resourceId = snippet?["resourceId"] as? [String: Any]
-            guard let channelId = resourceId?["channelId"] as? String else { return nil }
-            let title = snippet?["title"] as? String ?? ""
-            let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
-            return MediaItem(id: channelId, kind: .artist, title: title, subtitle: "Channel", thumbnailURL: thumb)
+        return pages.flatMap { resp -> [MediaItem] in
+            let items = (resp["items"] as? [[String: Any]]) ?? []
+            return items.compactMap { item -> MediaItem? in
+                let snippet = item["snippet"] as? [String: Any]
+                let resourceId = snippet?["resourceId"] as? [String: Any]
+                guard let channelId = resourceId?["channelId"] as? String else { return nil }
+                let title = snippet?["title"] as? String ?? ""
+                let thumb = Self.dataAPIThumbnail(snippet?["thumbnails"] as? [String: Any])
+                return MediaItem(id: channelId, kind: .artist, title: title, subtitle: "Channel", thumbnailURL: thumb)
+            }
         }
     }
 
@@ -361,12 +401,18 @@ final class InnerTubeClient: Sendable {
 
     /// Result of `/next`: queued tracks + browseIds for the lyrics and
     /// related-songs tabs (which we fetch separately on demand) + the
-    /// initial like state for the playing video.
+    /// initial like state for the playing video + the Tune chip cloud
+    /// (when YT included one for this watch context).
     struct NextResponse: Sendable {
         let queue: [MediaItem]
         let lyricsBrowseId: String?
         let relatedBrowseId: String?
         let likeStatus: LikeStatus
+        /// Tune chips ("All", "Familiar", "Discover", "Popular", "Party",
+        /// "Telugu", "2010s", …) parsed from the queue's `subHeaderChipCloud`.
+        /// Empty when YT didn't return one (some contexts — explicit
+        /// playlists, podcasts — don't have a Tune affordance).
+        let chips: [QueueChip]
     }
 
     enum LikeStatus: String, Sendable {
@@ -375,9 +421,41 @@ final class InnerTubeClient: Sendable {
         case indifferent = "INDIFFERENT"
     }
 
-    func nextQueue(videoId: String, playlistId: String?) async throws -> NextResponse {
+    /// One chip in YT Music's "Tune" cloud above the Up Next list.
+    /// Each chip carries the protobuf-encoded `params` and the auto-radio
+    /// `playlistId` (e.g. `RDATiYv2_7JUP7bIFg` for the Familiar variant of
+    /// videoId `v2_7JUP7bIFg`) needed to re-issue `/next` and pull the
+    /// queue variant the chip represents.
+    ///
+    /// Tokens are *per-watch-context* — the params encode the source
+    /// videoId — so we don't hardcode them. Riff parses them out of every
+    /// `/next` response and offers whichever chips YT served us.
+    struct QueueChip: Sendable, Equatable, Identifiable, Hashable {
+        /// YT's `uniqueId` (e.g. `"All"`, `"Familiar"`, `"Telugu"`).
+        let id: String
+        /// User-facing label (`text.runs[0].text`).
+        let label: String
+        /// Auto-radio playlistId for this variant; pass to `/next`.
+        let playlistId: String
+        /// Protobuf-encoded `params` for this variant; pass to `/next`.
+        let params: String
+        /// True when YT marks this chip as currently active in the
+        /// response — i.e. the queue we just got back is the one this
+        /// chip would produce.
+        let isSelected: Bool
+    }
+
+    func nextQueue(videoId: String, playlistId: String?, chip: QueueChip? = nil) async throws -> NextResponse {
         var payload: [String: Any] = ["videoId": videoId]
-        if let pid = playlistId { payload["playlistId"] = pid }
+        // When a chip is supplied, its (playlistId, params) override the
+        // caller's playlistId — the chip's playlistId is the radio
+        // variant (e.g. RDATiY...) that produces the desired queue.
+        if let chip {
+            payload["playlistId"] = chip.playlistId
+            payload["params"] = chip.params
+        } else if let pid = playlistId {
+            payload["playlistId"] = pid
+        }
         let body = try await postRaw(.next, body: payload)
 
         let queueItems = Parsing.array(body, "contents",
@@ -392,7 +470,12 @@ final class InnerTubeClient: Sendable {
             let title = Parsing.runs(r, "title") ?? ""
             let subtitle = Parsing.runs(r, "longBylineText") ?? Parsing.runs(r, "shortBylineText") ?? ""
             let thumb = Parsing.thumbnailURL(r["thumbnail"] as? [String: Any])
-            return MediaItem(id: videoId, kind: .song, title: title, subtitle: subtitle, thumbnailURL: thumb)
+            // Mine the byline runs for artist/album browseEndpoints.
+            // longBylineText runs are usually [artist, " • ", album] with
+            // both artist and album carrying their own navigationEndpoint.
+            let (albumId, artistId) = Self.extractIdsFromQueueRow(r)
+            return MediaItem(id: videoId, kind: .song, title: title, subtitle: subtitle,
+                             thumbnailURL: thumb, albumId: albumId, artistId: artistId)
         }
 
         // Tabs[1].endpoint.browseEndpoint.browseId → lyrics
@@ -422,7 +505,30 @@ final class InnerTubeClient: Sendable {
                 break
             }
         }
-        return NextResponse(queue: queue, lyricsBrowseId: lyricsId, relatedBrowseId: relatedId, likeStatus: likeStatus)
+        // Tune chip cloud lives below the queue panel:
+        //   tabs[0].tabRenderer.content.musicQueueRenderer
+        //     .subHeaderChipCloud.chipCloudRenderer.chips[].chipCloudChipRenderer
+        // Each chip's navigationEndpoint.queueUpdateCommand
+        //   .fetchContentsCommand.watchEndpoint carries the (playlistId,
+        // params) needed to re-fetch /next as the chip's variant.
+        let chipNodes = Parsing.array(body, "contents",
+            "singleColumnMusicWatchNextResultsRenderer", "tabbedRenderer",
+            "watchNextTabbedResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "musicQueueRenderer", "subHeaderChipCloud",
+            "chipCloudRenderer", "chips") ?? []
+        let chips: [QueueChip] = chipNodes.compactMap { node in
+            guard let r = node["chipCloudChipRenderer"] as? [String: Any] else { return nil }
+            let label = Parsing.runs(r, "text") ?? ""
+            let id = (r["uniqueId"] as? String) ?? label
+            let watch = Parsing.dig(r, ["navigationEndpoint", "queueUpdateCommand",
+                                        "fetchContentsCommand", "watchEndpoint"]) as? [String: Any]
+            guard let pid = watch?["playlistId"] as? String,
+                  let params = watch?["params"] as? String,
+                  !pid.isEmpty, !params.isEmpty else { return nil }
+            let selected = (r["isSelected"] as? Bool) ?? false
+            return QueueChip(id: id, label: label, playlistId: pid, params: params, isSelected: selected)
+        }
+        return NextResponse(queue: queue, lyricsBrowseId: lyricsId, relatedBrowseId: relatedId, likeStatus: likeStatus, chips: chips)
     }
 
     struct LyricLine: Sendable, Identifiable, Hashable {
@@ -495,11 +601,34 @@ final class InnerTubeClient: Sendable {
     struct DetailPage: Sendable {
         let title: String
         let subtitle: String
+        /// Structured form of `subtitle` — preserves the per-run
+        /// navigation endpoints YT Music ships, so the UI can render
+        /// the artist segment as a tappable link to their page.
+        /// Falls back to a single plain-text run when the response
+        /// didn't carry runs (rare, but possible on legacy responses).
+        let subtitleRuns: [AnnotatedRun]
         let artworkURL: URL?
         /// For albums/playlists: navigate /watch?list=<this> to play the
         /// whole thing. nil when not applicable (artist pages).
         let playablePlaylistId: String?
         let tracks: [MediaItem]
+        /// Carousels shown below the tracklist — typically "Other
+        /// versions", "More from <Artist>", "You might also like".
+        /// Empty when YT didn't include them (some playlists, podcasts).
+        /// Reuses `HomeSection` so the existing `HomeSectionRow` renderer
+        /// can be dropped in unchanged.
+        let relatedSections: [HomeSection]
+    }
+
+    /// One segment of a styled-text run from InnerTube. When `browseId`
+    /// is non-nil, that segment is a navigable link (currently only
+    /// artist links are surfaced — album / playlist links could be
+    /// added later as more places need them). Plain prose runs (e.g.
+    /// the year, the " • " separators) leave `browseId` nil.
+    struct AnnotatedRun: Sendable, Hashable {
+        let text: String
+        let browseId: String?
+        let kind: MediaItem.Kind?
     }
 
     func detail(forBrowseId browseId: String) async throws -> DetailPage {
@@ -516,6 +645,24 @@ final class InnerTubeClient: Sendable {
 
         let title = Parsing.runs(header, "title") ?? ""
         let subtitle = Parsing.runs(header, "subtitle") ?? Parsing.runs(header, "straplineTextOne") ?? ""
+        // Walk the subtitle runs once to preserve YT's nav endpoints.
+        // Two-row header layouts use `subtitle`; immersive (artist
+        // page) layouts use `straplineTextOne`. Try subtitle first;
+        // fall back so artist pages get parsed too.
+        let rawRuns: [[String: Any]] =
+            (Parsing.dig(header, ["subtitle", "runs"]) as? [[String: Any]])
+            ?? (Parsing.dig(header, ["straplineTextOne", "runs"]) as? [[String: Any]])
+            ?? []
+        let subtitleRuns: [AnnotatedRun] = rawRuns.map { run in
+            let text = (run["text"] as? String) ?? ""
+            if let endpoint = run["navigationEndpoint"] as? [String: Any],
+               let resolved = Self.endpointToIdKind(endpoint) {
+                return AnnotatedRun(text: text, browseId: resolved.0, kind: resolved.1)
+            }
+            return AnnotatedRun(text: text, browseId: nil, kind: nil)
+        }
+        let headerKeysList = Array(header?.keys ?? [:].keys)
+        Log.innertube.debug("detail browseId=\(browseId, privacy: .public) headerKeys=\(headerKeysList, privacy: .public) subtitle=\"\(subtitle, privacy: .public)\" rawRunCount=\(rawRuns.count) parsedRuns=\(subtitleRuns.map { "[\($0.text)|\($0.browseId ?? "nil")]" }, privacy: .public)")
         let artworkContainer: [String: Any]? =
             (Parsing.dig(header, ["thumbnail", "croppedSquareThumbnailRenderer", "thumbnail"]) as? [String: Any])
             ?? (Parsing.dig(header, ["thumbnail", "musicThumbnailRenderer", "thumbnail"]) as? [String: Any])
@@ -528,29 +675,63 @@ final class InnerTubeClient: Sendable {
             playablePlaylistId = comps.queryItems?.first(where: { $0.name == "list" })?.value
         }
 
-        // Try a couple of section paths since YT Music sometimes uses
-        // singleColumn and sometimes twoColumn layouts for /browse on
-        // album/playlist pages.
-        let singleCol = Parsing.array(body, "contents",
+        // YT Music album / playlist pages return one of two layouts:
+        //
+        //   - **single-column**: every shelf in
+        //     `singleColumnBrowseResultsRenderer.tabs[0]…sectionListRenderer.contents`
+        //     — tracklist first, then "More from …" / "You might also like"
+        //     after it.
+        //
+        //   - **two-column** (newer desktop layout): the tracklist is in
+        //     `twoColumnBrowseResultsRenderer.secondaryContents…contents`
+        //     and the related carousels live in a *separate* sibling at
+        //     `twoColumnBrowseResultsRenderer.tabs[0]…sectionListRenderer.contents`.
+        //     The first version of this code only looked at
+        //     secondaryContents, so on two-column responses the related
+        //     carousels were silently dropped.
+        //
+        // We collect both candidate trees and try each in turn for the
+        // tracklist; afterwards we union the leftover shelves from both
+        // (de-duped) as the related-sections pool.
+        let singleColShelves = Parsing.array(body, "contents",
             "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
-        let twoColSecondary = Parsing.array(body, "contents",
+        let twoColSecondaryShelves = Parsing.array(body, "contents",
             "twoColumnBrowseResultsRenderer", "secondaryContents",
             "sectionListRenderer", "contents") ?? []
-        let sectionContents = singleCol.isEmpty ? twoColSecondary : singleCol
-        Log.innertube.debug("detail browseId=\(browseId, privacy: .public) sectionShelves=\(sectionContents.count) shelfKinds=\(sectionContents.compactMap { Array($0.keys).first }, privacy: .public)")
+        let twoColPrimaryShelves = Parsing.array(body, "contents",
+            "twoColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        // Order matters: we look for the tracklist in this order. On
+        // two-column responses the tracklist is in secondaryContents;
+        // on single-column it's in the primary tab. Whichever matches
+        // first wins.
+        let allShelfTrees: [[[String: Any]]] = [
+            singleColShelves,
+            twoColSecondaryShelves,
+            twoColPrimaryShelves,
+        ]
+        Log.innertube.debug("detail browseId=\(browseId, privacy: .public) shelfCounts: single=\(singleColShelves.count) twoColSec=\(twoColSecondaryShelves.count) twoColPri=\(twoColPrimaryShelves.count)")
 
         var tracks: [MediaItem] = []
-        for shelf in sectionContents {
-            if let r = shelf["musicShelfRenderer"] as? [String: Any],
-               let contents = r["contents"] as? [[String: Any]] {
-                tracks = contents.compactMap(Self.parseListItem)
-                break
-            }
-            if let r = shelf["musicPlaylistShelfRenderer"] as? [String: Any],
-               let contents = r["contents"] as? [[String: Any]] {
-                tracks = contents.compactMap(Self.parseListItem)
-                break
+        var tracklistTreeIndex: Int? = nil
+        var tracklistShelfIndex: Int? = nil
+        outer: for (treeIdx, shelves) in allShelfTrees.enumerated() {
+            for (i, shelf) in shelves.enumerated() {
+                if let r = shelf["musicShelfRenderer"] as? [String: Any],
+                   let contents = r["contents"] as? [[String: Any]] {
+                    tracks = contents.compactMap(Self.parseListItem)
+                    tracklistTreeIndex = treeIdx
+                    tracklistShelfIndex = i
+                    break outer
+                }
+                if let r = shelf["musicPlaylistShelfRenderer"] as? [String: Any],
+                   let contents = r["contents"] as? [[String: Any]] {
+                    tracks = contents.compactMap(Self.parseListItem)
+                    tracklistTreeIndex = treeIdx
+                    tracklistShelfIndex = i
+                    break outer
+                }
             }
         }
         if tracks.isEmpty {
@@ -561,12 +742,47 @@ final class InnerTubeClient: Sendable {
         // from recommendation carousels) gets filtered out so the page
         // never shows "Album • Other artist" rows where tracks should be.
         tracks = tracks.filter { $0.kind == .song || $0.kind == .episode }
+
+        // Build the candidate "related shelves" pool: every shelf from
+        // every tree, minus the tracklist shelf itself. We don't dedupe
+        // by tree because the trees are disjoint paths in the response.
+        let trackIds = Set(tracks.map(\.id))
+        var candidateShelves: [[String: Any]] = []
+        for (treeIdx, shelves) in allShelfTrees.enumerated() {
+            for (i, shelf) in shelves.enumerated() {
+                if treeIdx == tracklistTreeIndex && i == tracklistShelfIndex { continue }
+                candidateShelves.append(shelf)
+            }
+        }
+        // Reuse parseHomeShelf — `musicCarouselShelfRenderer` (and friends)
+        // are identical between Home rails and the bottom-of-album shelves.
+        var seenSectionIds = Set<String>()
+        let relatedSections: [HomeSection] = candidateShelves.compactMap { shelf in
+            guard let section = Self.parseHomeShelf(shelf) else { return nil }
+            // De-dupe by section title — when both two-column trees
+            // include "You might also like" we only want it once.
+            let key = section.title.lowercased()
+            if !key.isEmpty {
+                if seenSectionIds.contains(key) { return nil }
+                seenSectionIds.insert(key)
+            }
+            // Drop items that are just the album's own tracks.
+            let filtered = section.items.filter { !trackIds.contains($0.id) }
+            guard !filtered.isEmpty else { return nil }
+            return HomeSection(id: section.id, title: section.title, items: filtered)
+        }
+        Log.innertube.debug("detail browseId=\(browseId, privacy: .public) tracks=\(tracks.count) related=\(relatedSections.count) titles=\(relatedSections.map(\.title), privacy: .public)")
+
         return DetailPage(
             title: title,
             subtitle: subtitle,
+            subtitleRuns: subtitleRuns.isEmpty
+                ? [AnnotatedRun(text: subtitle, browseId: nil, kind: nil)]
+                : subtitleRuns,
             artworkURL: artwork,
             playablePlaylistId: playablePlaylistId,
-            tracks: tracks
+            tracks: tracks,
+            relatedSections: relatedSections
         )
     }
 
@@ -648,7 +864,7 @@ final class InnerTubeClient: Sendable {
     ///   - `gridRenderer`                   — grid of tiles
     /// Falls back to scanForMediaItems for anything else so we never silently
     /// drop a section.
-    private static func parseHomeShelf(_ shelf: [String: Any]) -> HomeSection? {
+    static func parseHomeShelf(_ shelf: [String: Any]) -> HomeSection? {
         // Carousel of two-row tiles (Listen again, Mixed for you, …)
         if let r = shelf["musicCarouselShelfRenderer"] as? [String: Any] {
             let title = Parsing.runs(r, "header", "musicCarouselShelfBasicHeaderRenderer", "title") ?? ""
@@ -699,7 +915,7 @@ final class InnerTubeClient: Sendable {
     }
 
     /// `musicResponsiveListItemRenderer` (list rows in search/liked songs).
-    private static func parseListItem(_ wrapper: [String: Any]) -> MediaItem? {
+    static func parseListItem(_ wrapper: [String: Any]) -> MediaItem? {
         guard let r = wrapper["musicResponsiveListItemRenderer"] as? [String: Any] else { return nil }
         let cols = r["flexColumns"] as? [[String: Any]] ?? []
         let title = Parsing.runs(cols.first, "musicResponsiveListItemFlexColumnRenderer", "text") ?? ""
@@ -716,23 +932,154 @@ final class InnerTubeClient: Sendable {
         guard let resolved = endpointToIdKind(titleEndpoint) ?? endpointToIdKind(rowEndpoint) else { return nil }
         let (id, kind) = resolved
         let thumb = Parsing.thumbnailURL(Parsing.dig(r, ["thumbnail", "musicThumbnailRenderer", "thumbnail"]) as? [String: Any])
-        return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle, thumbnailURL: thumb)
+        // Mine flexColumns[1+] runs and the row menu for the album /
+        // artist browse references — drives the "Go to album / Go to
+        // artist" context-menu actions. We accept the first match per
+        // kind so a song with multiple artists still resolves to one.
+        let (albumId, artistId) = extractAlbumArtistIds(from: r, cols: cols)
+        return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle, thumbnailURL: thumb, albumId: albumId, artistId: artistId)
+    }
+
+    /// Variant of `extractAlbumArtistIds` for `playlistPanelVideoRenderer`
+    /// rows from `/next`. The shape is different — there are no flex
+    /// columns; the artist/album endpoints live inside `longBylineText.runs`
+    /// and the row's menu items.
+    private static func extractIdsFromQueueRow(_ row: [String: Any]) -> (album: String?, artist: String?) {
+        var album: String?
+        var artist: String?
+        let runs = (Parsing.dig(row, ["longBylineText", "runs"]) as? [[String: Any]]) ?? []
+        for run in runs {
+            guard let endpoint = run["navigationEndpoint"] as? [String: Any],
+                  let resolved = endpointToIdKind(endpoint) else { continue }
+            switch resolved.1 {
+            case .album where album == nil:   album = resolved.0
+            case .artist where artist == nil: artist = resolved.0
+            default: continue
+            }
+        }
+        if album == nil || artist == nil {
+            let menuItems = (Parsing.dig(row, ["menu", "menuRenderer", "items"]) as? [[String: Any]]) ?? []
+            for raw in menuItems {
+                let item = (raw["menuNavigationItemRenderer"] as? [String: Any]) ?? raw
+                guard let endpoint = item["navigationEndpoint"] as? [String: Any],
+                      let resolved = endpointToIdKind(endpoint) else { continue }
+                switch resolved.1 {
+                case .album where album == nil:   album = resolved.0
+                case .artist where artist == nil: artist = resolved.0
+                default: continue
+                }
+            }
+        }
+        return (album, artist)
+    }
+
+    /// Walk a row's flex columns + menu items pulling out the first
+    /// album browseId and the first artist browseId we find. YT Music's
+    /// row layouts are inconsistent — sometimes the album is in
+    /// flexColumns[2], sometimes only in the menu, sometimes absent —
+    /// so we try several sources rather than committing to one path.
+    private static func extractAlbumArtistIds(from row: [String: Any], cols: [[String: Any]]) -> (album: String?, artist: String?) {
+        var album: String?
+        var artist: String?
+
+        // flexColumns: scan every run's navigationEndpoint. Artist runs
+        // typically appear in [1], album runs in [2], but the order
+        // varies (especially for podcast episode rows).
+        for col in cols.dropFirst() {  // skip title column
+            let runs = (Parsing.dig(col, ["musicResponsiveListItemFlexColumnRenderer", "text", "runs"]) as? [[String: Any]]) ?? []
+            for run in runs {
+                guard let endpoint = run["navigationEndpoint"] as? [String: Any],
+                      let resolved = endpointToIdKind(endpoint) else { continue }
+                switch resolved.1 {
+                case .album where album == nil:   album = resolved.0
+                case .artist where artist == nil: artist = resolved.0
+                default: continue
+                }
+                if album != nil && artist != nil { return (album, artist) }
+            }
+        }
+
+        // Row menu: "Go to album" / "Go to artist" entries carry their
+        // own browseEndpoints. This is a fallback for rows whose flex
+        // columns omit them (search song shelves often do).
+        let menuItems = (Parsing.dig(row, ["menu", "menuRenderer", "items"]) as? [[String: Any]]) ?? []
+        for raw in menuItems {
+            let item = (raw["menuNavigationItemRenderer"] as? [String: Any]) ?? raw
+            guard let endpoint = item["navigationEndpoint"] as? [String: Any],
+                  let resolved = endpointToIdKind(endpoint) else { continue }
+            switch resolved.1 {
+            case .album where album == nil:   album = resolved.0
+            case .artist where artist == nil: artist = resolved.0
+            default: continue
+            }
+            if album != nil && artist != nil { break }
+        }
+        return (album, artist)
     }
 
     /// `musicTwoRowItemRenderer` (carousel tiles in home / library grids).
-    private static func parseTwoRowItem(_ wrapper: [String: Any]) -> MediaItem? {
+    static func parseTwoRowItem(_ wrapper: [String: Any]) -> MediaItem? {
         guard let r = wrapper["musicTwoRowItemRenderer"] as? [String: Any] else { return nil }
         let title = Parsing.runs(r, "title") ?? ""
         let subtitle = Parsing.runs(r, "subtitle") ?? ""
         let endpoint = r["navigationEndpoint"] as? [String: Any]
         guard let (id, kind) = endpointToIdKind(endpoint) else { return nil }
         let thumb = Parsing.thumbnailURL(Parsing.dig(r, ["thumbnailRenderer", "musicThumbnailRenderer", "thumbnail"]) as? [String: Any])
-        return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle, thumbnailURL: thumb)
+        // Carousel song tiles (Listen again, Quick Picks, etc.) carry
+        // their album / artist refs in the subtitle runs and the
+        // overflow menu — exactly like list rows do, just under
+        // different keys. Without this, "Go to album / Go to artist"
+        // never shows up on Home tiles.
+        let (albumId, artistId) = extractIdsFromTwoRowTile(r)
+        return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle,
+                         thumbnailURL: thumb, albumId: albumId, artistId: artistId)
+    }
+
+    /// Walks a `musicTwoRowItemRenderer`'s subtitle runs and overflow
+    /// menu pulling out the first album browseId and the first artist
+    /// browseId. The two-row tile shape diverges from list rows
+    /// enough that sharing one walker would obscure the field paths.
+    private static func extractIdsFromTwoRowTile(_ row: [String: Any]) -> (album: String?, artist: String?) {
+        var album: String?
+        var artist: String?
+
+        // subtitle.runs is typically [artistRun, " • ", albumRun] for
+        // songs. Both runs carry their own navigationEndpoint to the
+        // corresponding browse page.
+        let subtitleRuns = (Parsing.dig(row, ["subtitle", "runs"]) as? [[String: Any]]) ?? []
+        for run in subtitleRuns {
+            guard let endpoint = run["navigationEndpoint"] as? [String: Any],
+                  let resolved = endpointToIdKind(endpoint) else { continue }
+            switch resolved.1 {
+            case .album where album == nil:   album = resolved.0
+            case .artist where artist == nil: artist = resolved.0
+            default: continue
+            }
+            if album != nil && artist != nil { return (album, artist) }
+        }
+
+        // Overflow menu: "Go to album" / "Go to artist" entries are
+        // explicitly typed by YT, so this is the most reliable source
+        // when subtitle runs don't carry endpoints (some Quick Picks
+        // tiles render a flat unlabelled subtitle string).
+        let menuItems = (Parsing.dig(row, ["menu", "menuRenderer", "items"]) as? [[String: Any]]) ?? []
+        for raw in menuItems {
+            let item = (raw["menuNavigationItemRenderer"] as? [String: Any]) ?? raw
+            guard let endpoint = item["navigationEndpoint"] as? [String: Any],
+                  let resolved = endpointToIdKind(endpoint) else { continue }
+            switch resolved.1 {
+            case .album where album == nil:   album = resolved.0
+            case .artist where artist == nil: artist = resolved.0
+            default: continue
+            }
+            if album != nil && artist != nil { break }
+        }
+        return (album, artist)
     }
 
     /// Map a navigationEndpoint to (id, kind). Returns nil if we don't
     /// recognise the endpoint shape.
-    private static func endpointToIdKind(_ endpoint: [String: Any]?) -> (String, MediaItem.Kind)? {
+    static func endpointToIdKind(_ endpoint: [String: Any]?) -> (String, MediaItem.Kind)? {
         guard let endpoint else { return nil }
         if let watch = endpoint["watchEndpoint"] as? [String: Any],
            let videoId = watch["videoId"] as? String {

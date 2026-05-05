@@ -4,6 +4,7 @@ struct LibraryView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var section: Section = .liked
     @State private var items: [MediaItem] = []
+    @State private var errorMessage: String?
 
     enum Section: String, CaseIterable, Identifiable {
         case liked = "Liked", playlists = "Playlists", albums = "Albums", artists = "Artists", podcasts = "Podcasts", history = "History"
@@ -34,6 +35,13 @@ struct LibraryView: View {
             .padding(.top, 8)
 
             ScrollView {
+                if let errorMessage {
+                    ErrorBanner(message: errorMessage) {
+                        Task { await load() }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 12)
+                }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], spacing: 16) {
                     ForEach(items) { item in ThumbnailButton(item: item) }
                 }
@@ -68,8 +76,10 @@ struct LibraryView: View {
     private func load() async {
         do {
             items = try await env.innerTube.library(section: section)
+            errorMessage = nil
         } catch {
             items = []
+            errorMessage = LoadErrorPresenter.message(for: error, env: env)
         }
     }
 }

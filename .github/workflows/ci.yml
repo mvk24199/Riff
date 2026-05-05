@@ -1,0 +1,65 @@
+# GitHub Actions CI for Riff.
+#
+# What runs on every push / PR:
+#   1. XcodeGen regenerates the .xcodeproj from project.yml — catches
+#      anyone who forgot to commit a project.yml change.
+#   2. `xcodebuild build` against macOS — surfaces compile errors.
+#   3. `xcodebuild test` runs the parser + queue + resolver suites.
+#
+# Runs on macos-14 because Riff targets macOS 14 (Sonoma) and the SDK
+# needs to match. Apple bumps the available runner image periodically;
+# bump the `runs-on` line when a newer LTS lands.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          # Full history so the CFBundleVersion stamp script
+          # (`git rev-list --count HEAD` in project.yml) gets a real
+          # number rather than 1.
+          fetch-depth: 0
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -scheme Riff \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -skipMacroValidation \
+            build
+
+      - name: Test
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -scheme Riff \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -skipMacroValidation \
+            test

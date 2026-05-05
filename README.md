@@ -23,13 +23,22 @@ This project inverts that architecture: **all** browse, search, library, and pla
 
 ## Status
 
-🚧 **Pre-MVP.** See [`PLAN.md`](PLAN.md), [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md), and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+✅ **MVP + Phase 2 complete.** See [`PLAN.md`](PLAN.md), [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md), and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-> **Sign-in note**: Google blocks Google-account sign-in inside embedded
-> webviews on macOS. Anonymous browse + click-to-play work fully today; the
-> Library tab requires sign-in, which is implemented as a stub that surfaces
-> the wall. Proper Phase 2 fix is OAuth Device Flow (TV-style code entry),
-> tracked in PLAN.md.
+What works today:
+- Sign-in (Safari-UA WebView for cookies + OAuth Device Flow as a fallback)
+- Home / Search / Library tabs — fully native SwiftUI, no embedded web pages
+- Click any thumbnail to play (the YT-Music-iOS feel)
+- Full-screen Now Playing with synced lyrics, Up Next queue, related rail
+- Floating always-on-top mini player (⌥⌘M)
+- macOS Now Playing integration + media-key support
+- Tune popover wired to YT's real chip cloud (Familiar / Discover / Popular / mood / language variants)
+- Like, add-to-playlist, create playlist, played history (persisted)
+- Album / artist / playlist detail pages with "Releases for you" / "More like this" carousels
+- Tappable artist names in album headers — pushes the artist page
+- Standard track context menu (Play / Start radio / Play next / Add to queue / Go to album / Go to artist) on every row
+- Keyboard shortcuts: Space play/pause, ⌘← → next/prev, ⌥⌘← → seek ±15/30s, ⌘↑↓ volume, ⌘L like, ⌘1/2/3 tabs
+- MetricKit-based local crash + perf reporter (no telemetry leaves the device)
 
 ## Roadmap
 
@@ -42,15 +51,21 @@ This project inverts that architecture: **all** browse, search, library, and pla
 
 ## Building
 
-> Once XcodeGen is wired up:
->
-> ```sh
-> brew install xcodegen
-> xcodegen generate
-> open Riff.xcodeproj
-> ```
+```sh
+brew install xcodegen
+git clone https://github.com/mvk24199/Riff.git
+cd Riff
+xcodegen generate
+open Riff.xcodeproj
+```
 
-Requires macOS 14+ and Xcode 15+.
+Then ⌘R in Xcode. `Riff.xcodeproj` is gitignored — [`project.yml`](project.yml) is the source of truth.
+
+Requires **macOS 14+** and **Xcode 15+**.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The single firm rule: the WKWebView never surfaces in the UI outside the sign-in sheet. Every browse / list / player surface must be real SwiftUI fed by `InnerTubeClient`. PRs that violate this will be rejected.
 
 ## Architecture in one paragraph
 

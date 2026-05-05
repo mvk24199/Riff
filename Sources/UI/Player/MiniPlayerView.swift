@@ -88,6 +88,33 @@ struct MiniPlayerView: View {
             .background(.ultraThinMaterial)
             .contentShape(Rectangle())
             .onTapGesture { env.player.isFullPlayerOpen = true }
+            // Right-click on the mini bar surfaces the now-playing
+            // version of YT Music's track menu — Go to album/artist
+            // are the high-value entries here, so the user can jump
+            // away from the current track without having to expand
+            // the full player first.
+            .contextMenu { nowPlayingMenuItems }
+        }
+    }
+
+    /// Menu items operating on the *currently playing* track. Synthesizes
+    /// a MediaItem from PlayerBridge.Track so we can reuse
+    /// TrackContextMenu's logic; the menu won't appear if there's no
+    /// current track because the strip itself isn't visible then.
+    @ViewBuilder
+    private var nowPlayingMenuItems: some View {
+        if let track = env.player.currentTrack {
+            let item = MediaItem(
+                id: track.videoId,
+                kind: .song,
+                title: track.title,
+                subtitle: track.subtitle,
+                thumbnailURL: track.thumbnailURL,
+                albumId: track.albumId,
+                artistId: track.artistId
+            )
+            // omitPrimaryPlay: it's already playing.
+            TrackContextMenu(item: item, omitPrimaryPlay: true)
         }
     }
 

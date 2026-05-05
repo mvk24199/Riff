@@ -17,13 +17,21 @@ struct ThumbnailButton: View {
             Button(action: { Task { await playDirect() } }) { content }
                 .buttonStyle(.plain)
                 .onHover { hovering = $0 }
+                // Mirror YT Music: songs get the full track menu
+                // (Play / Start radio / Play next / Add to queue /
+                // Go to album / Go to artist / Add to playlist).
+                .contextMenu { TrackContextMenu(item: item) }
         } else {
             NavigationLink(value: item) { content }
                 .buttonStyle(.plain)
                 .onHover { hovering = $0 }
-                // Right-click / long-press: option to play immediately.
+                // Right-click / long-press: option to play immediately
+                // plus "Start radio" for albums/artists.
                 .contextMenu {
                     Button("Play") { Task { await playDirect() } }
+                    if item.kind == .album || item.kind == .artist || item.kind == .podcast {
+                        Button("Start radio") { Task { await playDirect() } }
+                    }
                 }
         }
     }

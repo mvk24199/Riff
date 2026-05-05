@@ -59,12 +59,30 @@ struct FloatingMiniPlayerView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .contextMenu { nowPlayingMenuItems }
         }
         .frame(width: 360, height: 70)
         .background(.ultraThinMaterial)
         .background(Color.black.opacity(0.85))
         .preferredColorScheme(.dark)
         .background(WindowFloater())
+    }
+
+    @ViewBuilder
+    private var nowPlayingMenuItems: some View {
+        if let track = env.player.currentTrack {
+            let item = MediaItem(
+                id: track.videoId,
+                kind: .song,
+                title: track.title,
+                subtitle: track.subtitle,
+                thumbnailURL: track.thumbnailURL,
+                albumId: track.albumId,
+                artistId: track.artistId
+            )
+            TrackContextMenu(item: item, omitPrimaryPlay: true)
+        }
     }
 
     private func button(systemName: String, size: CGFloat, action: @escaping () -> Void) -> some View {

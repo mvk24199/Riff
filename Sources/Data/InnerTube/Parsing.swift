@@ -20,8 +20,18 @@ enum Parsing {
         dig(root, path) as? String
     }
 
-    /// `{ runs: [{ text: ... }] }` joined into a single string.
-    static func runs(_ root: Any?, _ path: String..., separator: String = " • ") -> String? {
+    /// `{ runs: [{ text: ... }] }` concatenated into a single string.
+    ///
+    /// YT Music structures multi-segment text as:
+    ///   `[{text: "Artist"}, {text: " • "}, {text: "Album"}]`
+    /// — i.e. the separators are themselves runs. Joining with a
+    /// non-empty separator double-stamps them ("Artist •  •  • Album");
+    /// concatenation is what callers actually want.
+    ///
+    /// The optional `separator` parameter exists for the rare caller
+    /// that's pulling a list of distinct runs (e.g. lyrics line list
+    /// joined with "\n") and needs explicit control.
+    static func runs(_ root: Any?, _ path: String..., separator: String = "") -> String? {
         guard let runs = dig(root, path + ["runs"]) as? [[String: Any]] else { return nil }
         let parts = runs.compactMap { $0["text"] as? String }
         return parts.isEmpty ? nil : parts.joined(separator: separator)

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct RiffApp: App {
@@ -27,6 +28,35 @@ struct RiffApp: App {
             CommandGroup(after: .windowArrangement) {
                 MiniPlayerMenuItem()
             }
+            CommandGroup(before: .toolbar) {
+                TabSwitchMenuItems()
+                Divider()
+            }
+            // Transport shortcuts — Space play/pause, ⌘← / ⌘→ for prev/next
+            // track, ⌘↑ / ⌘↓ for volume nudge, ⌥⌘← / ⌥⌘→ for ±15 / ±30s
+            // skip. Wired through `@FocusedValue(\.appEnvironment)` so the
+            // bindings hit the active window's PlayerBridge.
+            CommandMenu("Playback") {
+                TransportMenuItems()
+            }
+            CommandGroup(replacing: .help) {
+                Button("Riff on GitHub") {
+                    if let url = URL(string: "https://github.com/mvk24199/Riff") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Button("Report an Issue…") {
+                    if let url = URL(string: "https://github.com/mvk24199/Riff/issues/new") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Divider()
+                Button("View License (AGPL-3.0)") {
+                    if let url = URL(string: "https://www.gnu.org/licenses/agpl-3.0.en.html") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
         }
 
         // Always-on-top compact playback strip in a separate window.
@@ -48,6 +78,114 @@ private struct MiniPlayerMenuItem: View {
     var body: some View {
         Button("Mini Player") { openWindow(id: "mini-player") }
             .keyboardShortcut("M", modifiers: [.command, .option])
+    }
+}
+
+/// View menu entries that switch the active main tab via ⌘1 / ⌘2 / ⌘3.
+/// Promoted out of MainTabs so we can read the AppEnvironment at the
+/// command-builder layer.
+private struct TabSwitchMenuItems: View {
+    @FocusedValue(\.appEnvironment) private var env
+
+    var body: some View {
+        Button("Home") { env?.activeTab = .home }
+            .keyboardShortcut("1", modifiers: .command)
+            .disabled(env == nil)
+        Button("Search") { env?.activeTab = .search }
+            .keyboardShortcut("2", modifiers: .command)
+            .disabled(env == nil)
+        Button("Library") { env?.activeTab = .library }
+            .keyboardShortcut("3", modifiers: .command)
+            .disabled(env == nil)
+    }
+}
+
+/// Playback menu — exposes Space (play/pause), arrow-key transport,
+/// and volume-nudge shortcuts at the App command-builder layer. Lives
+/// in its own struct so it can read `@FocusedValue(\.appEnvironment)`
+/// to drive the active window's PlayerBridge. Disabled when the
+/// PlayerBridge isn't available (no main window focused).
+private struct TransportMenuItems: View {
+    @FocusedValue(\.appEnvironment) private var env
+
+    var body: some View {
+        Button("Play / Pause") {
+            guard let env else { return }
+            Task { await env.player.togglePlay() }
+        }
+        // Space is the universal play/pause shortcut. Modifier-less so
+        // it works without ⌘ — matches Apple Music, Spotify, YT Music.
+        .keyboardShortcut(.space, modifiers: [])
+        .disabled(env?.player.hasTrack != true)
+
+        Button("Next Track") {
+            guard let env else { return }
+            Task { await env.player.next() }
+        }
+        .keyboardShortcut(.rightArrow, modifiers: .command)
+        .disabled(env?.player.hasTrack != true)
+
+        Button("Previous Track") {
+            guard let env else { return }
+            Task { await env.player.previous() }
+        }
+        .keyboardShortcut(.leftArrow, modifiers: .command)
+        .disabled(env?.player.hasTrack != true)
+
+        Divider()
+
+        Button("Skip Forward 30s") {
+            guard let env else { return }
+            Task { await env.player.skip(by: 30) }
+        }
+        .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+        .disabled(env?.player.hasTrack != true)
+
+        Button("Skip Back 15s") {
+            guard let env else { return }
+            Task { await env.player.skip(by: -15) }
+        }
+        .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+        .disabled(env?.player.hasTrack != true)
+
+        Divider()
+
+        Button("Volume Up") {
+            guard let env else { return }
+            // Step ~7% per press — coarse enough that holding the
+            // shortcut moves volume audibly between repeats.
+            let next = min(1.0, env.player.volume + 0.07)
+            Task { await env.player.setVolume(next) }
+        }
+        .keyboardShortcut(.upArrow, modifiers: .command)
+
+        Button("Volume Down") {
+            guard let env else { return }
+            let next = max(0.0, env.player.volume - 0.07)
+            Task { await env.player.setVolume(next) }
+        }
+        .keyboardShortcut(.downArrow, modifiers: .command)
+
+        Divider()
+
+        Button("Toggle Like") {
+            guard let env else { return }
+            Task { await env.player.toggleLike() }
+        }
+        .keyboardShortcut("L", modifiers: .command)
+        .disabled(env?.player.hasTrack != true)
+    }
+}
+
+/// FocusedValueKey that lets `CommandGroup` content reach the active
+/// window's AppEnvironment. Set in RootView via `.focusedSceneValue`.
+private struct AppEnvironmentFocusKey: FocusedValueKey {
+    typealias Value = AppEnvironment
+}
+extension FocusedValues {
+    fileprivate var appEnvironment: AppEnvironment? {
+        get { self[AppEnvironmentFocusKey.self] }
+        set { self[AppEnvironmentFocusKey.self] = newValue }
     }
 }
 
@@ -75,6 +213,7 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: env.player.isFullPlayerOpen)
         .background(Color.black.ignoresSafeArea())
+        .focusedSceneValue(\.appEnvironment, env)
         .sheet(isPresented: $env.isSignInSheetPresented) {
             SignInView()
         }
@@ -88,15 +227,13 @@ struct RootView: View {
 }
 
 struct MainTabs: View {
-    @State private var tab: Tab = .home
-
-    enum Tab: Hashable { case home, search, library }
+    @Environment(AppEnvironment.self) private var env
 
     var body: some View {
         VStack(spacing: 0) {
-            TopTabBar(selection: $tab)
+            TopTabBar()
             Group {
-                switch tab {
+                switch env.activeTab {
                 case .home:    HomeView()
                 case .search:  SearchView()
                 case .library: LibraryView()
@@ -108,7 +245,6 @@ struct MainTabs: View {
 
 struct TopTabBar: View {
     @Environment(AppEnvironment.self) private var env
-    @Binding var selection: MainTabs.Tab
 
     var body: some View {
         HStack(spacing: 24) {
@@ -122,24 +258,24 @@ struct TopTabBar: View {
         .padding(.vertical, 12)
     }
 
-    private func tab(_ title: String, _ value: MainTabs.Tab) -> some View {
+    private func tab(_ title: String, _ value: AppTab) -> some View {
         Button(action: {
             // Tapping the already-active tab pops its NavigationStack to
             // the root (so "Home" returns to the home grid even when the
             // user is deep inside an album/playlist detail page).
-            if selection == value {
+            if env.activeTab == value {
                 switch value {
                 case .home:    env.homeNavPath = NavigationPath()
                 case .search:  env.searchNavPath = NavigationPath()
                 case .library: env.libraryNavPath = NavigationPath()
                 }
             } else {
-                selection = value
+                env.activeTab = value
             }
         }) {
             Text(title)
-                .font(.system(size: 15, weight: selection == value ? .semibold : .regular))
-                .foregroundStyle(selection == value ? .white : .secondary)
+                .font(.system(size: 15, weight: env.activeTab == value ? .semibold : .regular))
+                .foregroundStyle(env.activeTab == value ? .white : .secondary)
         }
         .buttonStyle(.plain)
     }

@@ -49,6 +49,30 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.riff.app
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: Sources/Riff.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    postCompileScripts:
+      # Derive CFBundleVersion from `git rev-list --count HEAD` so each
+      # commit increments the build number — required for TestFlight,
+      # which rejects duplicate (CFBundleShortVersionString, CFBundleVersion)
+      # pairs. Runs *after* Xcode's Info.plist processing copies the
+      # plist into the .app bundle, *before* code signing — so signature
+      # covers our stamp. Falls back to "1" outside a git checkout.
+      - name: Sync CFBundleVersion to git rev-count
+        script: |
+          set -e
+          PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          if [ ! -f "${PLIST}" ]; then
+            echo "warning: ${PLIST} not present yet — skipping version stamp"
+            exit 0
+          fi
+          if [ -d "${SRCROOT}/.git" ]; then
+            BUILD_NUMBER=$(cd "${SRCROOT}" && git rev-list --count HEAD)
+          else
+            BUILD_NUMBER=1
+          fi
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${PLIST}"
+          echo "Stamped CFBundleVersion=${BUILD_NUMBER}"
+        basedOnDependencyAnalysis: false
 
   RiffTests:
     type: bundle.unit-test

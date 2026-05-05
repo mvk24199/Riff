@@ -6,6 +6,7 @@ struct SearchView: View {
     @State private var filter: SearchFilter = .all
     @State private var results: [MediaItem] = []
     @State private var searching: Bool = false
+    @State private var errorMessage: String?
 
     enum SearchFilter: String, CaseIterable, Identifiable {
         case all = "All", songs = "Songs", albums = "Albums", playlists = "Playlists", artists = "Artists", podcasts = "Podcasts"
@@ -39,13 +40,31 @@ struct SearchView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 8)
 
-            Picker("Filter", selection: $filter) {
-                ForEach(SearchFilter.allCases) { f in Text(f.rawValue).tag(f) }
+            // Pill-style filter row mirroring YT Music's chips. Horizontal
+            // scroll keeps it from clipping when the user resizes the
+            // window narrow.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(SearchFilter.allCases) { f in
+                        FilterChip(
+                            label: f.rawValue,
+                            selected: filter == f,
+                            action: { filter = f }
+                        )
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 4)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 24)
 
             ScrollView {
+                if let errorMessage {
+                    ErrorBanner(message: errorMessage) {
+                        Task { await debouncedRunSearch() }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 12)
+                }
                 if searching && results.isEmpty {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -58,13 +77,9 @@ struct SearchView: View {
                 } else if results.isEmpty, !query.isEmpty {
                     EmptySearchState(query: query)
                         .padding(.top, 80)
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], spacing: 16) {
-                        ForEach(results) { item in
-                            ThumbnailButton(item: item)
-                        }
-                    }
-                    .padding(.horizontal, 24)
+                } else if !results.isEmpty {
+                    resultList
+                        .padding(.horizontal, 24)
                 }
             }
         }
@@ -75,6 +90,79 @@ struct SearchView: View {
             await debouncedRunSearch()
         }
         .navigationDestination(for: MediaItem.self) { DetailView(item: $0) }
+    }
+
+    /// "Top result" hero card + list rows for the rest. Mirrors YT
+    /// Music's search layout — the first result is rendered in a wide
+    /// card with a prominent Play pill, the remainder as compact list
+    /// rows. We also break the list at the kind boundary (Songs /
+    /// Albums / Artists / etc.) under the "All" filter so users can
+    /// scan by category, the way YT Music does.
+    @ViewBuilder
+    private var resultList: some View {
+        if let top = results.first {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Top result")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.top, 8)
+                TopResultCard(item: top)
+                if results.count > 1 {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
+                        ForEach(groupedRest(), id: \.title) { group in
+                            if !group.title.isEmpty {
+                                Text(group.title)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.top, 16)
+                                    .padding(.bottom, 8)
+                            }
+                            ForEach(group.items) { item in
+                                SearchResultRow(item: item)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 16)
+        }
+    }
+
+    /// Buckets results 1+ (everything after the top result) by kind.
+    /// Under specific-kind filters we collapse to a single nameless
+    /// group so we don't show a redundant header.
+    private func groupedRest() -> [(title: String, items: [MediaItem])] {
+        let rest = Array(results.dropFirst())
+        guard filter == .all else {
+            return [(title: "", items: rest)]
+        }
+        // Preserve YT's original ordering (search shelves come back in
+        // a deliberate sequence — Songs first when relevant, etc.) by
+        // walking once and only emitting a header when the kind changes.
+        var groups: [(title: String, items: [MediaItem])] = []
+        var seenKinds: Set<MediaItem.Kind> = []
+        for item in rest {
+            let title = pluralKind(item.kind)
+            if !seenKinds.contains(item.kind) {
+                groups.append((title: title, items: [item]))
+                seenKinds.insert(item.kind)
+            } else if let lastIdx = groups.lastIndex(where: { $0.title == title }) {
+                groups[lastIdx].items.append(item)
+            }
+        }
+        return groups
+    }
+
+    private func pluralKind(_ kind: MediaItem.Kind) -> String {
+        switch kind {
+        case .song:     return "Songs"
+        case .album:    return "Albums"
+        case .playlist: return "Playlists"
+        case .artist:   return "Artists"
+        case .podcast:  return "Podcasts"
+        case .episode:  return "Episodes"
+        }
     }
 
     private struct SearchInput: Hashable {
@@ -100,6 +188,27 @@ struct SearchView: View {
         }
     }
 
+    /// Filter pill — selected state has the YT-Music white pill,
+    /// unselected is a dim translucent capsule. Replaces the segmented
+    /// picker which couldn't horizontally-scroll on narrow windows.
+    private struct FilterChip: View {
+        let label: String
+        let selected: Bool
+        let action: () -> Void
+        var body: some View {
+            Button(action: action) {
+                Text(label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(selected ? Color.white : Color.white.opacity(0.08))
+                    .foregroundStyle(selected ? .black : .white)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     private func debouncedRunSearch() async {
         do {
             try await Task.sleep(nanoseconds: 300_000_000)
@@ -111,8 +220,10 @@ struct SearchView: View {
         defer { searching = false }
         do {
             results = try await env.innerTube.search(query: query, filter: filter)
+            errorMessage = nil
         } catch {
             results = []
+            errorMessage = LoadErrorPresenter.message(for: error, env: env)
         }
     }
 }

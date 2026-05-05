@@ -24,15 +24,22 @@ struct DetailView: View {
                             .foregroundStyle(.white.opacity(0.55))
                             .padding(.horizontal, 32)
                     } else {
-                        tracklist(page.tracks)
+                        tracklist(page.tracks, fallbackArtwork: page.artworkURL ?? item.thumbnailURL)
+                    }
+                    // "More from <Artist>" / "You might also like" /
+                    // "Other versions" — YT Music's at-the-bottom carousels.
+                    // Falls through gracefully when YT didn't return any.
+                    if !page.relatedSections.isEmpty {
+                        relatedSections(page.relatedSections)
+                            .padding(.top, 16)
                     }
                 } else if loading {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 240)
                 } else if let error {
-                    Text(error)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 32)
+                    ErrorBanner(message: error) {
+                        Task { await load() }
+                    }
+                    .padding(.horizontal, 32)
                 }
             }
             .padding(.vertical, 24)
@@ -63,9 +70,8 @@ struct DetailView: View {
                     .font(.system(size: 32, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
-                Text(page.subtitle.isEmpty ? item.subtitle : page.subtitle)
+                annotatedSubtitle(page)
                     .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(3)
                 Spacer(minLength: 8)
                 HStack(spacing: 10) {
@@ -96,18 +102,34 @@ struct DetailView: View {
         .padding(.horizontal, 32)
     }
 
-    private func tracklist(_ tracks: [MediaItem]) -> some View {
+    /// Renders the album / playlist tracklist. `fallbackArtwork` is used
+    /// for any track whose own row didn't carry a thumbnail — common on
+    /// album responses where YT omits per-track artwork because every
+    /// track shares the album cover.
+    private func tracklist(_ tracks: [MediaItem], fallbackArtwork: URL?) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                // Backfill missing track artwork with the album/playlist
+                // cover so the now-playing strip and lock screen show
+                // *something* rather than a black square.
+                let resolved = MediaItem(
+                    id: track.id,
+                    kind: track.kind,
+                    title: track.title,
+                    subtitle: track.subtitle,
+                    thumbnailURL: track.thumbnailURL ?? fallbackArtwork,
+                    albumId: track.albumId,
+                    artistId: track.artistId
+                )
                 Button {
-                    Task { await env.player.play(item: track) }
+                    Task { await env.player.play(item: resolved) }
                 } label: {
                     HStack(spacing: 14) {
                         Text("\(index + 1)")
                             .font(.system(size: 13, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.45))
                             .frame(width: 28, alignment: .trailing)
-                        AsyncImage(url: track.thumbnailURL) { phase in
+                        AsyncImage(url: track.thumbnailURL ?? fallbackArtwork) { phase in
                             if case .success(let img) = phase {
                                 img.resizable().aspectRatio(contentMode: .fill)
                             } else {
@@ -139,6 +161,64 @@ struct DetailView: View {
                         _ = hovering
                     }
                 )
+                .contextMenu { TrackContextMenu(item: resolved) }
+            }
+        }
+    }
+
+    /// Renders the album / playlist / artist subtitle with the linkable
+    /// segments (artist / album runs) tappable. Built as an
+    /// `HStack(alignment: .firstTextBaseline)` of individual `Text` /
+    /// `Button` segments because:
+    ///
+    ///   - `AttributedString` + `.link` was eating runs in the album
+    ///     header (some responsive-header layouts wrap subtitle.runs
+    ///     in attributes that lose foreground colour, leaving an
+    ///     "invisible" string on black).
+    ///   - Native `Button` for each linkable run gives free hover
+    ///     feedback + correct accessibility labels.
+    ///
+    /// Tradeoff: a long subtitle won't wrap mid-run. In practice album
+    /// subtitles fit on one line anyway, and `Spacer` + `lineLimit(1)`
+    /// gracefully truncates with an ellipsis.
+    @ViewBuilder
+    private func annotatedSubtitle(_ page: InnerTubeClient.DetailPage) -> some View {
+        let runs: [InnerTubeClient.AnnotatedRun] = page.subtitleRuns.isEmpty
+            ? [InnerTubeClient.AnnotatedRun(
+                text: page.subtitle.isEmpty ? item.subtitle : page.subtitle,
+                browseId: nil, kind: nil)]
+            : page.subtitleRuns
+        // Drop empty runs that would render as zero-width gaps.
+        let visible = runs.filter { !$0.text.isEmpty }
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            ForEach(Array(visible.enumerated()), id: \.offset) { _, run in
+                if let id = run.browseId, let kind = run.kind, kind == .artist || kind == .album {
+                    Button {
+                        env.navigateToBrowseId(id, kind: kind)
+                    } label: {
+                        Text(run.text)
+                            .foregroundStyle(.white)
+                            .underline(true, color: .white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(run.text)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Renders the carousels returned by `/browse` after the tracklist.
+    /// Uses `HomeSectionRow` so the visual treatment matches the Home
+    /// tab's carousels — a familiar pattern keeps the page coherent.
+    private func relatedSections(_ sections: [HomeSection]) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Divider().background(Theme.divider)
+            ForEach(sections) { section in
+                HomeSectionRow(section: section)
+                    .padding(.horizontal, 32)
             }
         }
     }
@@ -170,7 +250,7 @@ struct DetailView: View {
             page = detail
             error = nil
         } catch {
-            self.error = "Couldn't load: \(error.localizedDescription)"
+            self.error = LoadErrorPresenter.message(for: error, env: env)
         }
     }
 
@@ -178,7 +258,7 @@ struct DetailView: View {
         if let plid = page.playablePlaylistId {
             await env.player.playPlaylist(id: plid)
         } else if let first = page.tracks.first {
-            await env.player.play(item: first)
+            await env.player.play(item: backfillArtwork(first, page: page))
         }
     }
 
@@ -188,7 +268,25 @@ struct DetailView: View {
         // have a clean param token, so the first random track is a
         // pragmatic stand-in.
         if let track = page.tracks.randomElement() {
-            await env.player.play(item: track)
+            await env.player.play(item: backfillArtwork(track, page: page))
         }
+    }
+
+    /// Returns `track` with its missing thumbnail filled from the
+    /// album/playlist cover, mirroring the same backfill the per-row
+    /// tap action does. Keeps the now-playing strip + Now Playing view
+    /// from showing a black square for tracks that didn't carry their
+    /// own artwork in the InnerTube response.
+    private func backfillArtwork(_ track: MediaItem, page: InnerTubeClient.DetailPage) -> MediaItem {
+        guard track.thumbnailURL == nil else { return track }
+        return MediaItem(
+            id: track.id,
+            kind: track.kind,
+            title: track.title,
+            subtitle: track.subtitle,
+            thumbnailURL: page.artworkURL ?? item.thumbnailURL,
+            albumId: track.albumId,
+            artistId: track.artistId
+        )
     }
 }

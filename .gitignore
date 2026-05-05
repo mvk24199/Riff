@@ -64,3 +64,19 @@ secrets/
 
 # Generated
 Riff.xcodeproj/
+
+# Local diagnostics (MetricKit payloads live under
+# ~/Library/Application Support/Riff/diagnostics; if anyone copies one
+# in-repo for analysis we don't want it committed).
+diagnostics/
+*.crash
+*.ips
+
+# Release artifacts
+*.dmg
+*.zip
+release/
+
+# Sparkle private signing key — public key is in Info.plist (and is
+# meant to be public); the private key NEVER goes near the repo.
+sparkle_eddsa_priv*

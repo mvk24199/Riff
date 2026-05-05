@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WebKit
 
 /// Public playback API. SwiftUI views call methods here; this class translates
 /// to JS evaluations on the hidden WKWebView, and observes the page's events
@@ -12,11 +13,29 @@ final class PlayerBridge {
     private(set) var duration: Double = 0  // seconds; 0 until the page reports it
     var progress: Double { duration > 0 ? elapsed / duration : 0 }
     private(set) var currentTrack: Track? = nil
-    private(set) var upNext: [MediaItem] = []
-    /// Tracks that have played earlier in this session (most-recent last).
-    /// Capped at `historyCap` so it doesn't grow unbounded.
-    private(set) var playedHistory: [MediaItem] = []
+
+    /// Owns Up Next + played-history. `let` because the manager itself
+    /// is immutable; @Observable still tracks accesses to its own
+    /// properties (queue.upNext / queue.playedHistory) so SwiftUI
+    /// re-renders on mutation through the pass-throughs below.
+    let queue = QueueManager()
+
+    /// Pass-through accessors. Existing views read `env.player.upNext`
+    /// and `env.player.playedHistory` — keeping the API stable while
+    /// the actual storage moves to `QueueManager`.
+    var upNext: [MediaItem] { queue.upNext }
+    var playedHistory: [MediaItem] { queue.playedHistory }
+
     private(set) var related: [MediaItem] = []
+    /// Tune chips parsed from the latest `/next` response (e.g. All,
+    /// Familiar, Discover, Popular, Telugu, 2010s, …). Empty when YT
+    /// didn't include a chip cloud for the current watch context.
+    private(set) var availableChips: [InnerTubeClient.QueueChip] = []
+    /// Id of the chip currently driving `upNext`. nil before the first
+    /// `/next` lands or when the user hasn't selected one explicitly —
+    /// in which case we treat the YT-marked `isSelected` chip as the
+    /// active one for highlighting purposes.
+    private(set) var selectedChipId: String? = nil
     private(set) var lyrics: String? = nil
     private(set) var lyricsLines: [InnerTubeClient.LyricLine] = []
     private(set) var lyricsTimed: Bool = false
@@ -34,6 +53,12 @@ final class PlayerBridge {
     /// the right Up Next queue when playing inside a playlist (without it,
     /// /next returns radio-style suggestions instead of the playlist's tracks).
     @ObservationIgnored private var currentPlaylistId: String?
+
+    /// In-flight `/next` refresh, if any. Held so we can cancel-and-replace
+    /// when the user clicks rapidly through tracks — without this, multiple
+    /// concurrent `/next` requests race and the last-to-complete wins,
+    /// which may not be the most-recent click.
+    @ObservationIgnored private var nextQueueTask: Task<Void, Never>?
 
     /// Fires after any state change (track, play/pause, progress). Used by
     /// AppEnvironment to drive NowPlayingCenter without coupling the two
@@ -68,6 +93,9 @@ final class PlayerBridge {
         // so by the time the user clicks anything the page is loaded.
         self.webBridge = HiddenPlayerWebView()
         self.webBridge.onEvent = { [weak self] event in self?.handle(event) }
+        // QueueManager loads its own persisted history; nothing to do
+        // here besides depending on the `let queue = QueueManager()`
+        // initializer that already ran.
     }
 
     private static let volumeKey = "player.volume"
@@ -79,12 +107,30 @@ final class PlayerBridge {
         let subtitle: String
         let thumbnailURL: URL?
         let duration: Double
+        /// Album browseId, when known. Drives "Go to album" from the
+        /// now-playing menu. Sourced from the MediaItem the user clicked,
+        /// or backfilled from the `/next` queue row that matches videoId.
+        var albumId: String? = nil
+        /// Artist browseId, when known. Drives "Go to artist".
+        var artistId: String? = nil
     }
 
     // MARK: - Commands
 
+    /// YT Music's auto-radio playlist prefix. Tacked onto the watch URL
+    /// when a song is played with no other playlist context — the browser
+    /// does the same: clicking a single tile navigates to
+    /// `?v=<id>&list=RDAMVM<id>`, which triggers a server-generated radio
+    /// queue (25-50 related tracks that auto-extends). Without it, /next
+    /// returns just the current track and Up Next sits empty.
+    private static func radioPlaylistId(for videoId: String) -> String {
+        "RDAMVM" + videoId
+    }
+
     func play(videoId: String) async {
-        await navigate(watchURL(videoId: videoId, playlistId: nil))
+        let radio = Self.radioPlaylistId(for: videoId)
+        currentPlaylistId = radio
+        await navigate(watchURL(videoId: videoId, playlistId: radio))
     }
 
     /// Click-to-play with an item we already have full metadata for (search
@@ -99,15 +145,33 @@ final class PlayerBridge {
             title: item.title,
             subtitle: item.subtitle,
             thumbnailURL: item.thumbnailURL,
-            duration: 0
+            duration: 0,
+            albumId: item.albumId,
+            artistId: item.artistId
         )
         // Reset & pre-fetch surrounding context (queue + lyrics/related ids).
-        upNext = []
+        // Use the auto-radio playlist (RDAMVM<videoId>) so /next returns a
+        // proper YT-Music-style radio queue instead of just the current
+        // track. play(videoId:) below sets currentPlaylistId; we mirror it
+        // here so the queue refresh has the right context immediately.
+        queue.clearQueue()
         related = []
         lyrics = nil
-        currentPlaylistId = nil
+        // Tune chips are per-watch-context. Clear them so the popover
+        // doesn't briefly show the previous track's chips while the new
+        // /next is in flight.
+        availableChips = []
+        selectedChipId = nil
+        // Reset progress so the scrubber starts at 0 instead of carrying
+        // over the previous track's elapsed/duration. The JS bridge will
+        // populate fresh values once the new media loads.
+        elapsed = 0
+        duration = 0
+        lastTrackChangeAt = Date()
+        let radio = Self.radioPlaylistId(for: item.id)
+        currentPlaylistId = radio
         userClickedAt = Date()
-        refreshNextQueueAndIds(forVideoId: item.id, playlistId: nil)
+        refreshNextQueueAndIds(forVideoId: item.id, playlistId: radio)
         onUpdate?()
         await play(videoId: item.id)
     }
@@ -120,6 +184,17 @@ final class PlayerBridge {
     private static let userClickGraceSeconds: TimeInterval = 30
     private static let historyCap = 50
 
+    /// Last time we transitioned to a NEW track (different videoId, post-
+    /// click-grace). Used to filter out stale `progress` events from the
+    /// just-ended track while YT Music's SPA swaps the `<video>` element's
+    /// media source. Without this, the elapsed/duration UI briefly shows
+    /// the previous track's tail end (e.g. "6:43 / 8:42" on a fresh song).
+    @ObservationIgnored private var lastTrackChangeAt: Date = .distantPast
+    /// Ignore progress events for this long after a track change. Tuned
+    /// against the typical 500ms `timeupdate` cadence; the JS bridge will
+    /// report fresh values on the next tick after YT loads the new media.
+    private static let trackChangeGraceSeconds: TimeInterval = 1.2
+
     private func archiveCurrent() {
         guard let old = currentTrack else {
             Log.bridge.debug("archiveCurrent: no current track to archive")
@@ -128,18 +203,19 @@ final class PlayerBridge {
         let item = MediaItem(
             id: old.videoId, kind: .song,
             title: old.title, subtitle: old.subtitle,
-            thumbnailURL: old.thumbnailURL
+            thumbnailURL: old.thumbnailURL,
+            albumId: old.albumId, artistId: old.artistId
         )
-        if playedHistory.last?.id == item.id {
+        // QueueManager handles dedup-against-tail + cap + persist
+        // synchronously, so we don't have to.
+        let prevSize = queue.playedHistory.count
+        queue.archive(item)
+        let newSize = queue.playedHistory.count
+        if newSize == prevSize {
             Log.bridge.debug("archiveCurrent: skip dup last=\(item.title, privacy: .public) (\(item.id, privacy: .public))")
-            return
+        } else {
+            Log.bridge.debug("archiveCurrent: appended \(item.title, privacy: .public) (\(item.id, privacy: .public)); historySize=\(newSize)")
         }
-        playedHistory.append(item)
-        if playedHistory.count > Self.historyCap {
-            playedHistory.removeFirst(playedHistory.count - Self.historyCap)
-        }
-        let size = playedHistory.count
-        Log.bridge.debug("archiveCurrent: appended \(item.title, privacy: .public) (\(item.id, privacy: .public)); historySize=\(size)")
     }
 
     /// Pull /next for the given videoId — populates `upNext` and stashes
@@ -147,36 +223,99 @@ final class PlayerBridge {
     /// Pass `playlistId` when known so /next returns the playlist's track
     /// list instead of generic radio suggestions.
     private func refreshNextQueueAndIds(forVideoId id: String, playlistId: String?) {
-        Task { [innerTube, weak self] in
+        // Cancel-and-replace: clicking 5 tracks in 2 seconds shouldn't fan out
+        // 5 concurrent `/next` requests where the last-to-complete wins.
+        nextQueueTask?.cancel()
+        nextQueueTask = Task { [innerTube, weak self] in
             guard let response = try? await innerTube.nextQueue(videoId: id, playlistId: playlistId) else {
                 Log.bridge.debug("refreshNextQueue: nextQueue threw or returned nil for v=\(id, privacy: .public)")
                 return
             }
+            // Bail if we were superseded by a newer click while awaiting.
+            if Task.isCancelled { return }
             Log.bridge.debug("refreshNextQueue v=\(id, privacy: .public) plid=\(playlistId ?? "nil", privacy: .public) → queue=\(response.queue.count) likeStatus=\(String(describing: response.likeStatus), privacy: .public)")
 
             // /next sometimes returns just the currently-playing track in
             // its queue (especially right after navigation, before the
             // page populates the full panel). When we know we're inside
-            // a playlist, fall back to fetching the playlist's own
-            // tracklist via /browse so Up Next isn't empty.
-            var queue = response.queue
-            if queue.count <= 1, let plid = playlistId, !plid.isEmpty {
+            // a playlist (including the auto-radio "RDAMVM" prefix that
+            // play(item:) attaches for single-song clicks), fall back to
+            // fetching the playlist's own tracklist via /browse so Up
+            // Next isn't empty. (`fetched` rather than `queue` to avoid
+            // shadowing the QueueManager property name.)
+            var fetched = response.queue
+            if fetched.count <= 1, let plid = playlistId, !plid.isEmpty {
                 if let detail = try? await innerTube.playlistDetail(playlistId: plid) {
+                    if Task.isCancelled { return }
                     Log.bridge.debug("refreshNextQueue: fallback to playlistDetail \(plid, privacy: .public) → \(detail.tracks.count) tracks")
-                    queue = detail.tracks
+                    fetched = detail.tracks
                 }
             }
 
+            if Task.isCancelled { return }
             await MainActor.run {
-                self?.upNext = queue
-                self?.lyricsBrowseId = response.lyricsBrowseId
-                self?.relatedBrowseId = response.relatedBrowseId
-                self?.liked = response.likeStatus == .like
+                guard let self, !Task.isCancelled else { return }
+                self.queue.replaceQueue(fetched)
+                // Backfill the current track's album/artist IDs if /next
+                // returned them and the track we have on screen is missing
+                // them — common when the user clicks a carousel tile whose
+                // parent shelf didn't carry album navigation.
+                if let cur = self.currentTrack,
+                   (cur.albumId == nil || cur.artistId == nil),
+                   let match = fetched.first(where: { $0.id == cur.videoId }),
+                   (match.albumId != nil || match.artistId != nil) {
+                    self.currentTrack = Track(
+                        videoId: cur.videoId,
+                        title: cur.title,
+                        subtitle: cur.subtitle,
+                        thumbnailURL: cur.thumbnailURL,
+                        duration: cur.duration,
+                        albumId: cur.albumId ?? match.albumId,
+                        artistId: cur.artistId ?? match.artistId
+                    )
+                }
+                self.lyricsBrowseId = response.lyricsBrowseId
+                self.relatedBrowseId = response.relatedBrowseId
+                self.liked = response.likeStatus == .like
+                self.availableChips = response.chips
+                // Sync selected chip with whichever YT marked active —
+                // chips are per-watch-context, so old selections from a
+                // previous track don't carry forward.
+                self.selectedChipId = response.chips.first(where: \.isSelected)?.id
                 // Invalidate previously cached tab content for the old track.
-                self?.lyrics = nil
-                self?.lyricsLines = []
-                self?.lyricsTimed = false
-                self?.related = []
+                self.lyrics = nil
+                self.lyricsLines = []
+                self.lyricsTimed = false
+                self.related = []
+            }
+        }
+    }
+
+    /// Apply a Tune chip — re-issues `/next` with the chip's (playlistId,
+    /// params) and replaces `upNext` with the resulting queue. The
+    /// currently-playing track keeps playing (we don't navigate the
+    /// WebView), only the suggested-next queue changes.
+    func applyChip(_ chip: InnerTubeClient.QueueChip) {
+        guard let videoId = currentTrack?.videoId else { return }
+        // Optimistically reflect the selection in the UI before the
+        // network round-trip completes.
+        selectedChipId = chip.id
+        nextQueueTask?.cancel()
+        nextQueueTask = Task { [innerTube, weak self] in
+            guard let response = try? await innerTube.nextQueue(videoId: videoId, playlistId: nil, chip: chip) else {
+                Log.bridge.debug("applyChip: nextQueue threw for chip=\(chip.id, privacy: .public)")
+                return
+            }
+            if Task.isCancelled { return }
+            Log.bridge.debug("applyChip \(chip.id, privacy: .public) → queue=\(response.queue.count)")
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                self.queue.replaceQueue(response.queue)
+                // Refresh chip set: YT returns the same cloud back, but
+                // with a different chip's `isSelected=true`.
+                if !response.chips.isEmpty {
+                    self.availableChips = response.chips
+                }
             }
         }
     }
@@ -246,31 +385,24 @@ final class PlayerBridge {
     func playPodcast(id: String)  async { await playByResolvingBrowseId(id) }
     func playArtistRadio(id: String) async { await playByResolvingBrowseId(id) }
 
-    /// Resolves a browseId via InnerTube to a playable (videoId, playlistId)
-    /// tuple, then navigates /watch?v=&list=. Has multiple fallback paths
-    /// so unresponsive entities are rare:
-    ///   1. innerTube.playable(forBrowseId:) — primary path (microformat)
-    ///   2. If browseId starts with "VL", strip and try as direct playlist
-    ///   3. Last resort: navigate /browse/<id> so the user lands on the
-    ///      detail page even if we can't auto-play.
+    /// Hand off browseId resolution to `BrowseIdResolver` and navigate
+    /// the WKWebView to the resolved destination. The resolver owns
+    /// the resolution policy (primary path / VL strip / browse-page
+    /// fallback); this method owns the navigation side only.
     private func playByResolvingBrowseId(_ browseId: String) async {
-        if let tuple = (try? await innerTube.playable(forBrowseId: browseId)) ?? nil {
-            let url = watchURL(videoId: tuple.videoId, playlistId: tuple.playlistId)
-            Log.resolver.debug("\(browseId, privacy: .public) → v=\(tuple.videoId ?? "nil", privacy: .public) list=\(tuple.playlistId ?? "nil", privacy: .public) → \(url, privacy: .public)")
+        let destination = await BrowseIdResolver.resolve(browseId, via: innerTube)
+        switch destination {
+        case let .watch(videoId, playlistId):
+            let url = watchURL(videoId: videoId, playlistId: playlistId)
+            Log.resolver.debug("\(browseId, privacy: .public) → v=\(videoId ?? "nil", privacy: .public) list=\(playlistId ?? "nil", privacy: .public) → \(url, privacy: .public)")
             await navigate(url)
-            return
-        }
-        // Fallback 1: VL-prefix strip → direct playlist play.
-        if browseId.hasPrefix("VL") {
-            let plid = String(browseId.dropFirst(2))
+        case let .directPlaylist(plid):
             Log.resolver.debug("\(browseId, privacy: .public) → resolver failed; falling back to direct playlist plid=\(plid, privacy: .public)")
             await navigate(watchURL(videoId: nil, playlistId: plid))
-            return
+        case let .browsePage(url):
+            Log.resolver.debug("\(browseId, privacy: .public) → no playable endpoint and no fallback; navigating to browse page")
+            await navigate(url.absoluteString)
         }
-        // Fallback 2: at least put the user on the entity's page so they
-        // can manually press Play if our resolver missed.
-        Log.resolver.debug("\(browseId, privacy: .public) → no playable endpoint and no fallback; navigating to browse page")
-        await navigate("https://music.youtube.com/browse/\(browseId)")
     }
 
     private func watchURL(videoId: String?, playlistId: String?) -> String {
@@ -326,13 +458,35 @@ final class PlayerBridge {
         return plid
     }
 
+    /// Insert `item` immediately after the current track in the local
+    /// Up Next list — equivalent to YT Music's "Play next". Same caveat
+    /// as `removeFromQueue`: the WebView's actual playback queue isn't
+    /// mutated, so when the current track ends YT will autoplay
+    /// whatever IT thinks is next, not necessarily the inserted item.
+    /// The user can click the row in Up Next to switch to it
+    /// immediately, which is the intended workflow.
+    func playNext(item: MediaItem) { queue.playNext(item) }
+
+    /// Append `item` to the bottom of the local Up Next list — YT
+    /// Music's "Add to queue". Same local-only caveat as `playNext`.
+    func addToQueueEnd(item: MediaItem) { queue.addToEnd(item) }
+
+    /// Explicitly start the auto-radio for `item` — same flow as
+    /// `play(item:)` since RDAMVM is our default. Kept as a separate
+    /// entry point so context-menu code reads naturally and so we can
+    /// later differentiate "play in album context" vs "start radio"
+    /// without touching every call site.
+    func startRadio(for item: MediaItem) async {
+        await play(item: item)
+    }
+
     /// Remove a track from the local Up Next list. Doesn't (yet) sync the
     /// removal to YT Music's server-side queue — InnerTube's queue-mutation
     /// endpoint isn't documented for our client; the WebView's queue still
     /// holds the original list. Treat this as a local-UX hint until we
     /// implement a JS bridge into the page's queue API.
     func removeFromQueue(videoId: String) async {
-        upNext.removeAll { $0.id == videoId }
+        queue.remove(videoId: videoId)
     }
 
     /// Local-only reorder. Same caveat as removeFromQueue: this only
@@ -340,11 +494,7 @@ final class PlayerBridge {
     /// playback queue. Useful for users who want to inspect / curate
     /// what's coming up.
     func moveInQueue(videoId: String, by offset: Int) {
-        guard let index = upNext.firstIndex(where: { $0.id == videoId }) else { return }
-        let newIndex = max(0, min(upNext.count - 1, index + offset))
-        guard newIndex != index else { return }
-        let item = upNext.remove(at: index)
-        upNext.insert(item, at: newIndex)
+        queue.move(videoId: videoId, by: offset)
     }
 
     /// Volume 0.0...1.0. Persisted across track changes within the session
@@ -357,19 +507,53 @@ final class PlayerBridge {
         await eval("window.musicBridge.setVolume(\(clamped))")
     }
 
+    /// Per-call timeout for JS evaluation. A hung WKWebView (e.g. an
+    /// unresponsive page) shouldn't leave our awaiting Task pending forever
+    /// — that's how UI commands silently stop working without an error to
+    /// surface. 5s is generous: a healthy bridge resolves in <50ms.
+    private static let jsEvalTimeoutSeconds: UInt64 = 5
+
     private func eval(_ js: String) async {
         guard bridgeReady else {
             pendingCommands.append(js)
             return
         }
-        _ = try? await webBridge.webView.evaluateJavaScript(js)
+        await evalWithTimeout(js: js)
     }
 
     private func flushPending() async {
         let cmds = pendingCommands
         pendingCommands.removeAll()
         for cmd in cmds {
-            _ = try? await webBridge.webView.evaluateJavaScript(cmd)
+            await evalWithTimeout(js: cmd)
+        }
+    }
+
+    /// Race the JS eval against a sleep — whichever wins, the other is
+    /// cancelled. We don't surface the timeout as an error (callers `try?`'d
+    /// the original) but we log it so a hung bridge is debuggable.
+    private func evalWithTimeout(js: String) async {
+        let webView = webBridge.webView
+        let timeoutNs = Self.jsEvalTimeoutSeconds * 1_000_000_000
+        let evalTask = Task { @MainActor in
+            _ = try? await webView.evaluateJavaScript(js)
+        }
+        let timeoutTask = Task {
+            try? await Task.sleep(nanoseconds: timeoutNs)
+        }
+        // Whichever completes first wins; cancel the loser.
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await evalTask.value; return true }
+            group.addTask { await timeoutTask.value; return false }
+            if let first = await group.next() {
+                if first == false {
+                    Log.bridge.debug("eval timed out after \(Self.jsEvalTimeoutSeconds)s; js prefix=\(js.prefix(80), privacy: .public)")
+                    evalTask.cancel()
+                } else {
+                    timeoutTask.cancel()
+                }
+                group.cancelAll()
+            }
         }
     }
 
@@ -380,20 +564,30 @@ final class PlayerBridge {
         case .ready:
             if !bridgeReady {
                 bridgeReady = true
-                Task {
-                    await flushPending()
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.flushPending()
                     // Re-apply persisted prefs to the freshly-loaded page.
-                    if volume != 1.0 {
-                        _ = try? await webBridge.webView.evaluateJavaScript("window.musicBridge.setVolume(\(volume))")
+                    if self.volume != 1.0 {
+                        await self.evalWithTimeout(js: "window.musicBridge.setVolume(\(self.volume))")
                     }
-                    if playbackRate != 1.0 {
-                        _ = try? await webBridge.webView.evaluateJavaScript("window.musicBridge.setPlaybackRate(\(playbackRate))")
+                    if self.playbackRate != 1.0 {
+                        await self.evalWithTimeout(js: "window.musicBridge.setPlaybackRate(\(self.playbackRate))")
                     }
                 }
             }
         case .stateChanged(let playing):
             isPlaying = playing
         case .progress(let t, let d):
+            // Filter stale events that arrive in the window right after a
+            // track change. YT Music's SPA can keep firing `timeupdate`
+            // events with the previous track's currentTime/duration for
+            // ~500-1000ms before the new media source loads — without this
+            // guard the scrubber jumps to the previous track's tail.
+            let inGrace = Date().timeIntervalSince(lastTrackChangeAt) < Self.trackChangeGraceSeconds
+            if inGrace, t > 5 {
+                return
+            }
             elapsed = t
             duration = d
         case .trackChanged(let id, let playlistId, let title, let artist, let art):
@@ -416,7 +610,9 @@ final class PlayerBridge {
                         title: existing.title,
                         subtitle: existing.subtitle,
                         thumbnailURL: existing.thumbnailURL,
-                        duration: duration
+                        duration: duration,
+                        albumId: existing.albumId,
+                        artistId: existing.artistId
                     )
                 }
             } else if sameVideoId && withinClickGrace {
@@ -428,7 +624,9 @@ final class PlayerBridge {
                         title: existing.title,
                         subtitle: existing.subtitle,
                         thumbnailURL: existing.thumbnailURL,
-                        duration: duration
+                        duration: duration,
+                        albumId: existing.albumId,
+                        artistId: existing.artistId
                     )
                 }
             } else {
@@ -436,7 +634,29 @@ final class PlayerBridge {
                 // outside the click-grace window (autoplay advance).
                 // Archive the previous track to history before replacing.
                 archiveCurrent()
-                currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
+                // Reset progress to 0 immediately. Stale `<video>`
+                // currentTime/duration from the previous track will
+                // bleed through `timeupdate` events for up to ~1s while
+                // YT Music's SPA swaps media sources; the grace window
+                // checked in the .progress branch suppresses those.
+                elapsed = 0
+                duration = 0
+                lastTrackChangeAt = Date()
+                // JS bridge doesn't surface album/artist IDs (they're not
+                // on `<video>` or mediaSession.metadata). Backfill from
+                // the queue if it has them — typical when autoplaying
+                // through an Up Next that came back from /next with
+                // longBylineText nav endpoints intact.
+                let queueMatch = upNext.first(where: { $0.id == id })
+                currentTrack = Track(
+                    videoId: id,
+                    title: title,
+                    subtitle: artist,
+                    thumbnailURL: art,
+                    duration: 0,
+                    albumId: queueMatch?.albumId,
+                    artistId: queueMatch?.artistId
+                )
                 currentPlaylistId = playlistId
                 userClickedAt = .distantPast  // stop being protective
                 refreshNextQueueAndIds(forVideoId: id, playlistId: playlistId)

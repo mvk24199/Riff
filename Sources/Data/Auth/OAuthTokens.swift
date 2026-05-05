@@ -1,8 +1,26 @@
 import Foundation
+import os
 
-/// Persisted OAuth credentials for the YouTube Data scope. Stored as JSON in
-/// the macOS Keychain. Access tokens expire (~1h); the refresh token is the
-/// long-lived secret we use to mint new access tokens.
+/// Persisted OAuth credentials for the YouTube Data scope. Access
+/// tokens expire (~1h); the refresh token is the long-lived secret we
+/// use to mint new access tokens.
+///
+/// Storage policy: **Keychain-first, UserDefaults fallback.**
+///
+/// Why both:
+///   - On a signed release build, Keychain is the right place: per-user,
+///     OS-encrypted, never written to backup files, scoped to our bundle id.
+///   - On ad-hoc-signed dev builds, every Xcode rebuild produces a *new*
+///     code signature so macOS treats each build as a different requestor
+///     and re-prompts "Riff wants to access keychain" on every launch.
+///     UserDefaults sidesteps that friction during development.
+///
+/// We try Keychain on every load/save. If Keychain returns an error
+/// (typical for a denied prompt or the ad-hoc-signature mismatch case
+/// above), we silently fall through to UserDefaults and log it. On
+/// load we also opportunistically migrate from UserDefaults → Keychain
+/// when both stores diverge — so the moment the build gains a stable
+/// signing identity, the next launch transparently hardens.
 struct OAuthTokens: Codable, Sendable {
     let accessToken: String
     let refreshToken: String?
@@ -11,28 +29,54 @@ struct OAuthTokens: Codable, Sendable {
 
     var isExpired: Bool { Date() >= expiresAt.addingTimeInterval(-30) }
 
-    /// Storage key in UserDefaults. Was originally the Keychain — but
-    /// ad-hoc-signed dev builds get a fresh code signature on every Xcode
-    /// build, so macOS treats each build as a different requestor and
-    /// re-prompts "Riff wants to access keychain" on every launch. Until
-    /// we have proper code signing, plain UserDefaults storage is the
-    /// pragmatic choice: device-local, not synced via iCloud, and the
-    /// access tokens it holds expire on their own (1h).
-    private static let defaultsKey = "oauth.youtube.tokens"
+    private static let storageKey = "oauth.youtube.tokens"
+    private static let log = Logger(subsystem: "dev.riff.app", category: "oauth")
 
     static func load() -> OAuthTokens? {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
-        return try? JSONDecoder.iso8601.decode(OAuthTokens.self, from: data)
+        // Keychain first.
+        if let json = Keychain.get(storageKey),
+           let data = json.data(using: .utf8),
+           let decoded = try? JSONDecoder.iso8601.decode(OAuthTokens.self, from: data) {
+            return decoded
+        }
+        // UserDefaults fallback. If we find tokens here but Keychain
+        // was empty, migrate forward — next save() lands them in
+        // Keychain so future loads pick the secure path.
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let decoded = try? JSONDecoder.iso8601.decode(OAuthTokens.self, from: data) else {
+            return nil
+        }
+        log.debug("loaded tokens from UserDefaults; will attempt Keychain migration on next save")
+        return decoded
     }
 
     func save() throws {
         let data = try JSONEncoder.iso8601.encode(self)
-        UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw OAuthTokens.SaveError.encoding
+        }
+        // Try Keychain first. On success, also clear any stale
+        // UserDefaults copy so the two stores don't drift.
+        do {
+            try Keychain.set(json, for: Self.storageKey)
+            UserDefaults.standard.removeObject(forKey: Self.storageKey)
+            Self.log.debug("tokens saved to Keychain")
+        } catch {
+            // Fall back to UserDefaults — see policy comment at top.
+            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            Self.log.error("Keychain save failed (\(String(describing: error), privacy: .public)); fell back to UserDefaults")
+        }
     }
 
     static func clear() {
-        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        // Wipe both stores on sign-out so a downgrade from Keychain
+        // → UserDefaults (or vice versa across builds) can't leave
+        // a stale token behind.
+        Keychain.delete(storageKey)
+        UserDefaults.standard.removeObject(forKey: storageKey)
     }
+
+    enum SaveError: Error { case encoding }
 }
 
 private extension JSONDecoder {

@@ -16,6 +16,13 @@ struct OAuthClientConfig: Sendable {
         clientId != Self.tvClientId
     }
 
+    /// **NOT a secret.** This is the publicly-known YouTube TV OAuth
+    /// client pair — Google ships these IDs in the YouTube TV / Apple
+    /// TV / game console apps and they're widely embedded in
+    /// open-source clients (yt-dlp, NewPipe, etc.). The "secret" is
+    /// only used to identify the *application*, not the user — actual
+    /// authorization happens via Device Flow where the user enters a
+    /// one-time code on their phone. Safe to commit.
     static let tvClientId     = "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com"
     static let tvClientSecret = "SboVhoG9s0rNafixCSGGKXAT"
 
