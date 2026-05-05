@@ -46,6 +46,23 @@ final class AppEnvironment {
     var searchNavPath = NavigationPath()
     var libraryNavPath = NavigationPath()
 
+    /// Cached user-owned playlists for "Add to Playlist" menus. Loaded on
+    /// demand when a UI surface needs them; refreshed whenever the user
+    /// signs in/out.
+    private(set) var userPlaylists: [MediaItem] = []
+    private(set) var userPlaylistsLoading = false
+    func loadUserPlaylistsIfNeeded() {
+        guard isSignedIn, !userPlaylistsLoading, userPlaylists.isEmpty else { return }
+        userPlaylistsLoading = true
+        Task { [innerTube] in
+            let items = (try? await innerTube.library(section: .playlists)) ?? []
+            await MainActor.run {
+                userPlaylists = items.filter { $0.kind == .playlist }
+                userPlaylistsLoading = false
+            }
+        }
+    }
+
     init() {
         self.innerTube = InnerTubeClient()
         self.player = PlayerBridge(innerTube: innerTube)

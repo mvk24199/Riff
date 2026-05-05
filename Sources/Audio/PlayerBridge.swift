@@ -233,6 +233,13 @@ final class PlayerBridge {
         await eval("window.musicBridge.skipBy(\(seconds))")
     }
 
+    /// Add the currently-playing track to a user-owned playlist. Caller
+    /// supplies the target playlistId. Requires sign-in (SAPISID cookie).
+    func addCurrentTrackToPlaylist(playlistId: String) async throws {
+        guard let videoId = currentTrack?.videoId else { return }
+        try await innerTube.addToPlaylist(videoId: videoId, playlistId: playlistId)
+    }
+
     /// Remove a track from the local Up Next list. Doesn't (yet) sync the
     /// removal to YT Music's server-side queue — InnerTube's queue-mutation
     /// endpoint isn't documented for our client; the WebView's queue still

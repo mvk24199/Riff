@@ -274,7 +274,40 @@ struct NowPlayingView: View {
                 Task { await env.player.skip(by: 30) }
             }
             playbackRateMenu
+            addToPlaylistMenu
         }
+    }
+
+    /// "Add to Playlist…" menu — only meaningful when signed in. Loads the
+    /// user's playlists lazily on first open.
+    private var addToPlaylistMenu: some View {
+        Menu {
+            if !env.isSignedIn {
+                Text("Sign in to add tracks to your playlists.")
+            } else if env.userPlaylistsLoading {
+                Text("Loading…")
+            } else if env.userPlaylists.isEmpty {
+                Text("No playlists found.")
+            } else {
+                ForEach(env.userPlaylists) { pl in
+                    Button(pl.title) {
+                        Task {
+                            try? await env.player.addCurrentTrackToPlaylist(playlistId: pl.id)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "text.badge.plus")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: 36, height: 40)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 36, height: 40)
+        .onAppear { env.loadUserPlaylistsIfNeeded() }
     }
 
     /// Playback-speed picker. 1× by default; useful for podcasts at 1.25–2×.

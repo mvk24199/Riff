@@ -496,6 +496,19 @@ final class InnerTubeClient: Sendable {
         _ = try await postRaw(.like, body: ["target": ["videoId": videoId]])
     }
 
+    /// Add the given video to the given user-owned playlist. Requires
+    /// SAPISID cookie auth (the user's session). The playlistId is the
+    /// raw PL... id (no VL prefix).
+    func addToPlaylist(videoId: String, playlistId: String) async throws {
+        _ = try await postRaw(.editPlaylist, body: [
+            "playlistId": playlistId,
+            "actions": [[
+                "action": "ACTION_ADD_VIDEO",
+                "addedVideoId": videoId,
+            ]],
+        ])
+    }
+
     /// Remove a previously-set like.
     func removeLike(videoId: String) async throws {
         _ = try await postRaw(.removeLike, body: ["target": ["videoId": videoId]])

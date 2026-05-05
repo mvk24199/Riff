@@ -33,17 +33,14 @@ struct SettingsView: View {
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    intro
-                    setupSteps
-                    credentialsBlock
-                    if env.isSignedIn {
-                        Button("Sign Out") {
-                            env.signOut()
-                            dismiss()
-                        }
-                        .buttonStyle(.bordered)
-                    }
+                VStack(alignment: .leading, spacing: 28) {
+                    accountSection
+                    Divider().background(Theme.divider)
+                    keyboardShortcutsSection
+                    Divider().background(Theme.divider)
+                    libraryAccessSection
+                    Divider().background(Theme.divider)
+                    aboutSection
                 }
                 .padding(28)
             }
@@ -55,6 +52,121 @@ struct SettingsView: View {
                 clientId = config.clientId
                 clientSecret = config.clientSecret
             }
+        }
+    }
+
+    // MARK: - Sections
+
+    private var accountSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("Account")
+            HStack(spacing: 14) {
+                Circle()
+                    .fill(env.isSignedIn ? Theme.red : Color.white.opacity(0.1))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Image(systemName: env.isSignedIn ? "person.fill" : "person")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(env.isSignedIn ? "Signed in to YouTube Music" : "Not signed in")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(env.isSignedIn
+                         ? "Library + personalized recommendations are available."
+                         : "Anonymous browse + click-to-play work; sign in for Library access.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+                Spacer()
+                if env.isSignedIn {
+                    Button("Sign Out") {
+                        env.signOut()
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button("Sign In…") {
+                        env.isSignInSheetPresented = true
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.red)
+                }
+            }
+        }
+    }
+
+    private var keyboardShortcutsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("Keyboard shortcuts")
+            shortcutRow("Sign in",         keys: "⇧ ⌘ L")
+            shortcutRow("Settings",        keys: "⌘ ,")
+            shortcutRow("Mini Player",     keys: "⌥ ⌘ M")
+            shortcutRow("Close player",    keys: "⎋")
+            shortcutRow("Quit",            keys: "⌘ Q")
+        }
+    }
+
+    private var libraryAccessSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Library access (advanced)")
+            Text("Riff signs you in via Google's WebView flow which gives you full Library access through the YouTube Music cookie session — no setup required. The OAuth Device Flow path below is only useful if you want to access the YouTube Data API directly. Most users can ignore this.")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.65))
+                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("Configure custom OAuth credentials") {
+                VStack(alignment: .leading, spacing: 16) {
+                    setupSteps
+                    credentialsBlock
+                }
+                .padding(.top, 12)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .tint(.white)
+        }
+    }
+
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("About")
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Riff")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Native macOS YouTube Music client • AGPL-3.0")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                Spacer()
+                Text("v0.1.0")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+        }
+    }
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .textCase(.uppercase)
+            .tracking(1.2)
+            .foregroundStyle(.white.opacity(0.55))
+    }
+
+    private func shortcutRow(_ label: String, keys: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.85))
+            Spacer()
+            Text(keys)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
         }
     }
 
