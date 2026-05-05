@@ -23,14 +23,10 @@
     }
 
     const api = {
-        playVideo(videoId) {
-            // YT Music uses a hash route for /watch; navigation kicks off load+play.
-            location.href = "https://music.youtube.com/watch?v=" + encodeURIComponent(videoId);
-        },
-        playAlbum(browseId)    { location.href = "https://music.youtube.com/browse/" + encodeURIComponent(browseId) + "?play=1"; },
-        playPlaylist(playlistId) { location.href = "https://music.youtube.com/playlist?list=" + encodeURIComponent(playlistId) + "&play=1"; },
-        playPodcast(browseId)  { location.href = "https://music.youtube.com/browse/" + encodeURIComponent(browseId) + "?play=1"; },
-        playArtistRadio(browseId) { location.href = "https://music.youtube.com/browse/" + encodeURIComponent(browseId) + "?play=1"; },
+        // Single navigation primitive: Swift builds the full /watch?v=&list=
+        // URL (after resolving any browseId on the Swift side) and tells the
+        // page to load it. The /watch route auto-plays.
+        navigate(url) { location.href = url; },
         togglePlay() { const v = videoEl(); if (!v) return; v.paused ? v.play() : v.pause(); },
         next()       { document.querySelector(".next-button")?.click(); },
         previous()   { document.querySelector(".previous-button")?.click(); },

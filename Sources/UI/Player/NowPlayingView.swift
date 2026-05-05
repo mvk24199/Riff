@@ -50,11 +50,55 @@ struct NowPlayingView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
 
+                if !env.player.upNext.isEmpty {
+                    UpNextList(items: env.player.upNext)
+                        .frame(maxHeight: 240)
+                }
+
                 Spacer()
             }
             .padding(.horizontal, 32)
         }
         .preferredColorScheme(.dark)
         .frame(minWidth: 480, minHeight: 720)
+    }
+}
+
+private struct UpNextList: View {
+    let items: [MediaItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Up Next")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(items) { item in
+                        HStack(spacing: 12) {
+                            AsyncImage(url: item.thumbnailURL) { phase in
+                                if case .success(let img) = phase {
+                                    img.resizable().aspectRatio(contentMode: .fill)
+                                } else {
+                                    Color.gray.opacity(0.2)
+                                }
+                            }
+                            .frame(width: 36, height: 36)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title).font(.system(size: 13)).lineLimit(1)
+                                Text(item.subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .background(Color.white.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
     }
 }

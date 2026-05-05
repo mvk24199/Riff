@@ -12,6 +12,7 @@ final class PlayerBridge {
     private(set) var duration: Double = 0  // seconds; 0 until the page reports it
     var progress: Double { duration > 0 ? elapsed / duration : 0 }
     private(set) var currentTrack: Track? = nil
+    private(set) var upNext: [MediaItem] = []
     var hasTrack: Bool { currentTrack != nil }
 
     /// Fires after any state change (track, play/pause, progress). Used by
@@ -21,11 +22,18 @@ final class PlayerBridge {
     var onUpdate: (() -> Void)?
 
     @ObservationIgnored
+    private let innerTube: InnerTubeClient
+
+    @ObservationIgnored
     private lazy var webBridge: HiddenPlayerWebView = {
         let bridge = HiddenPlayerWebView()
         bridge.onEvent = { [weak self] event in self?.handle(event) }
         return bridge
     }()
+
+    init(innerTube: InnerTubeClient) {
+        self.innerTube = innerTube
+    }
 
     struct Track: Hashable {
         let videoId: String
@@ -38,13 +46,40 @@ final class PlayerBridge {
     // MARK: - Commands
 
     func play(videoId: String) async {
-        await eval("window.musicBridge.playVideo(\(videoId.jsonQuoted))")
+        await navigate(watchURL(videoId: videoId, playlistId: nil))
     }
 
-    func playAlbum(id: String)    async { await eval("window.musicBridge.playAlbum(\(id.jsonQuoted))") }
-    func playPlaylist(id: String) async { await eval("window.musicBridge.playPlaylist(\(id.jsonQuoted))") }
-    func playPodcast(id: String)  async { await eval("window.musicBridge.playPodcast(\(id.jsonQuoted))") }
-    func playArtistRadio(id: String) async { await eval("window.musicBridge.playArtistRadio(\(id.jsonQuoted))") }
+    /// Plays a known YT Music playlist (regular playlists where `id` is the
+    /// playlistId itself). For album/podcast/artist tiles, see the resolver
+    /// variants below.
+    func playPlaylist(id: String) async {
+        await navigate(watchURL(videoId: nil, playlistId: id))
+    }
+
+    func playAlbum(id: String)    async { await playByResolvingBrowseId(id) }
+    func playPodcast(id: String)  async { await playByResolvingBrowseId(id) }
+    func playArtistRadio(id: String) async { await playByResolvingBrowseId(id) }
+
+    /// Resolves a browseId via InnerTube (first watchEndpoint in the
+    /// response), then navigates to /watch?v=&list= so the page builds the
+    /// queue. Silently no-ops if the browse has no playable item.
+    private func playByResolvingBrowseId(_ browseId: String) async {
+        guard let tuple = (try? await innerTube.playable(forBrowseId: browseId)) ?? nil else { return }
+        await navigate(watchURL(videoId: tuple.videoId, playlistId: tuple.playlistId))
+    }
+
+    private func watchURL(videoId: String?, playlistId: String?) -> String {
+        var components = URLComponents(string: "https://music.youtube.com/watch")!
+        var items: [URLQueryItem] = []
+        if let videoId { items.append(URLQueryItem(name: "v", value: videoId)) }
+        if let playlistId { items.append(URLQueryItem(name: "list", value: playlistId)) }
+        components.queryItems = items
+        return components.url?.absoluteString ?? "https://music.youtube.com/"
+    }
+
+    private func navigate(_ url: String) async {
+        await eval("window.musicBridge.navigate(\(url.jsonQuoted))")
+    }
 
     func togglePlay() async { await eval("window.musicBridge.togglePlay()") }
     func next()       async { await eval("window.musicBridge.next()") }
@@ -70,6 +105,10 @@ final class PlayerBridge {
             duration = d
         case .trackChanged(let id, let title, let artist, let art):
             currentTrack = Track(videoId: id, title: title, subtitle: artist, thumbnailURL: art, duration: duration)
+            Task { [innerTube, weak self] in
+                let queue = (try? await innerTube.nextQueue(videoId: id, playlistId: nil)) ?? []
+                await MainActor.run { self?.upNext = queue }
+            }
         }
         onUpdate?()
     }

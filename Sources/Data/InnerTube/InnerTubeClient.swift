@@ -89,6 +89,38 @@ final class InnerTubeClient: Sendable {
         }
     }
 
+    /// Resolve a browseId (album / podcast / artist) into a playable
+    /// `(videoId, playlistId?)` tuple. We walk the response and pick the
+    /// first `watchEndpoint` we find — for an album/podcast detail page
+    /// that's the first track of the listing; for an artist page it's the
+    /// top song. The page itself returns a queue when we navigate via
+    /// `/watch?v=<videoId>&list=<playlistId>`.
+    ///
+    /// Returns nil when the browse response has no playable item (rare —
+    /// e.g. an artist page with no top songs).
+    func playable(forBrowseId browseId: String) async throws -> (videoId: String, playlistId: String?)? {
+        let body = try await postRaw(.browse, body: ["browseId": browseId])
+        return Self.findFirstWatchEndpoint(body)
+    }
+
+    private static func findFirstWatchEndpoint(_ root: Any?) -> (String, String?)? {
+        if let dict = root as? [String: Any] {
+            if let watch = dict["watchEndpoint"] as? [String: Any],
+               let vid = watch["videoId"] as? String {
+                return (vid, watch["playlistId"] as? String)
+            }
+            for (_, v) in dict {
+                if let r = findFirstWatchEndpoint(v) { return r }
+            }
+        }
+        if let arr = root as? [Any] {
+            for v in arr {
+                if let r = findFirstWatchEndpoint(v) { return r }
+            }
+        }
+        return nil
+    }
+
     func nextQueue(videoId: String, playlistId: String?) async throws -> [MediaItem] {
         var payload: [String: Any] = ["videoId": videoId]
         if let pid = playlistId { payload["playlistId"] = pid }

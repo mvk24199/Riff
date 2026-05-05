@@ -21,7 +21,7 @@ final class AppEnvironment {
 
     init() {
         self.innerTube = InnerTubeClient()
-        self.player = PlayerBridge()
+        self.player = PlayerBridge(innerTube: innerTube)
         self.nowPlaying = NowPlayingCenter(player: player)
         self.hasSignedIn = UserDefaults.standard.bool(forKey: Self.signedInKey)
 
