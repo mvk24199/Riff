@@ -28,6 +28,12 @@ struct RootView: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
+        .sheet(isPresented: .init(
+            get: { !env.hasSignedIn },
+            set: { _ in }
+        )) {
+            SignInView()
+        }
     }
 }
 

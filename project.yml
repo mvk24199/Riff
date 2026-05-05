@@ -41,6 +41,9 @@ targets:
         NSHumanReadableCopyright: "© 2026. AGPL-3.0."
     entitlements:
       path: Sources/Riff.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.riff.app
