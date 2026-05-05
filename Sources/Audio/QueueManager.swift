@@ -34,9 +34,12 @@ final class QueueManager {
     @ObservationIgnored private let historyCap: Int
     @ObservationIgnored private let historyStore: PlayedHistoryStore
 
-    init(historyCap: Int = 50) {
+    /// `defaults` is injectable for tests so fixture history can't
+    /// leak into the production `UserDefaults.standard`. Production
+    /// callers should pass nothing and let it default.
+    init(historyCap: Int = 50, defaults: UserDefaults = .standard) {
         self.historyCap = historyCap
-        self.historyStore = PlayedHistoryStore(cap: historyCap)
+        self.historyStore = PlayedHistoryStore(cap: historyCap, defaults: defaults)
         self.playedHistory = historyStore.load()
     }
 
