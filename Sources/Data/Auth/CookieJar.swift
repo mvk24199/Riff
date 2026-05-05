@@ -11,8 +11,14 @@ enum CookieJar {
     static func syncFromWebView() async {
         let store = WKWebsiteDataStore.default().httpCookieStore
         let cookies = await store.allCookies()
-        for cookie in cookies where cookie.domain.hasSuffix("youtube.com") {
-            HTTPCookieStorage.shared.setCookie(cookie)
+        var bridged = 0
+        for cookie in cookies {
+            let domain = cookie.domain
+            if domain.hasSuffix("youtube.com") || domain.hasSuffix("google.com") || domain.hasSuffix("googleusercontent.com") {
+                HTTPCookieStorage.shared.setCookie(cookie)
+                bridged += 1
+            }
         }
+        Log.innertube.debug("CookieJar bridged \(bridged) cookies from WebView → HTTPCookieStorage")
     }
 }

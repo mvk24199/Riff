@@ -42,7 +42,7 @@ struct RootView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: $env.isSignInSheetPresented) {
-            OAuthSignInView()
+            SignInView()
         }
         .sheet(isPresented: $env.isSettingsSheetPresented) {
             SettingsView()
