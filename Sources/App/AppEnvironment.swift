@@ -35,6 +35,9 @@ final class AppEnvironment {
     /// auto-presented — the app works anonymously by default.
     var isSignInSheetPresented: Bool = false
 
+    /// Drives the Settings sheet (custom OAuth credentials, sign-out).
+    var isSettingsSheetPresented: Bool = false
+
     init() {
         self.innerTube = InnerTubeClient()
         self.player = PlayerBridge(innerTube: innerTube)

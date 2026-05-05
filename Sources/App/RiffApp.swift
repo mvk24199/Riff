@@ -21,6 +21,8 @@ struct RiffApp: App {
                     Button("Sign In…") { environment.isSignInSheetPresented = true }
                         .keyboardShortcut("L", modifiers: [.command, .shift])
                 }
+                Button("Settings…") { environment.isSettingsSheetPresented = true }
+                    .keyboardShortcut(",", modifiers: .command)
             }
         }
     }
@@ -41,6 +43,9 @@ struct RootView: View {
         .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: $env.isSignInSheetPresented) {
             OAuthSignInView()
+        }
+        .sheet(isPresented: $env.isSettingsSheetPresented) {
+            SettingsView()
         }
     }
 }
@@ -99,6 +104,8 @@ private struct AccountMenu: View {
     var body: some View {
         if env.isSignedIn {
             Menu {
+                Button("Settings…") { env.isSettingsSheetPresented = true }
+                Divider()
                 Button("Sign Out") { env.signOut() }
             } label: {
                 Circle()

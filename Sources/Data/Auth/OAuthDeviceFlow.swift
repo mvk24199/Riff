@@ -29,10 +29,11 @@ final class OAuthDeviceFlow {
 
     private(set) var state: State = .idle
 
-    // YouTube TV client (same one ytmusicapi documents). Public values.
-    private static let clientId     = "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com"
-    private static let clientSecret = "SboVhoG9s0rNafixCSGGKXAT"
-    private static let scope        = "https://www.googleapis.com/auth/youtube"
+    /// Pulled from OAuthClientConfig at call time so a Settings change
+    /// takes effect on the next sign-in attempt without reinstalling.
+    private static var clientId: String     { OAuthClientConfig.load().clientId }
+    private static var clientSecret: String { OAuthClientConfig.load().clientSecret }
+    private static let scope = "https://www.googleapis.com/auth/youtube"
 
     private static let deviceCodeURL = URL(string: "https://oauth2.googleapis.com/device/code")!
     private static let tokenURL      = URL(string: "https://oauth2.googleapis.com/token")!

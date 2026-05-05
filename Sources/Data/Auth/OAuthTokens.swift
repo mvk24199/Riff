@@ -11,22 +11,27 @@ struct OAuthTokens: Codable, Sendable {
 
     var isExpired: Bool { Date() >= expiresAt.addingTimeInterval(-30) }
 
-    private static let keychainKey = "oauth.youtube.tokens"
+    /// Storage key in UserDefaults. Was originally the Keychain — but
+    /// ad-hoc-signed dev builds get a fresh code signature on every Xcode
+    /// build, so macOS treats each build as a different requestor and
+    /// re-prompts "Riff wants to access keychain" on every launch. Until
+    /// we have proper code signing, plain UserDefaults storage is the
+    /// pragmatic choice: device-local, not synced via iCloud, and the
+    /// access tokens it holds expire on their own (1h).
+    private static let defaultsKey = "oauth.youtube.tokens"
 
     static func load() -> OAuthTokens? {
-        guard let json = Keychain.get(keychainKey),
-              let data = json.data(using: .utf8) else { return nil }
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
         return try? JSONDecoder.iso8601.decode(OAuthTokens.self, from: data)
     }
 
     func save() throws {
         let data = try JSONEncoder.iso8601.encode(self)
-        guard let json = String(data: data, encoding: .utf8) else { return }
-        try Keychain.set(json, for: Self.keychainKey)
+        UserDefaults.standard.set(data, forKey: Self.defaultsKey)
     }
 
     static func clear() {
-        Keychain.delete(keychainKey)
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
     }
 }
 
