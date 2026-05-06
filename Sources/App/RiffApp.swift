@@ -174,6 +174,19 @@ private struct TransportMenuItems: View {
         }
         .keyboardShortcut("L", modifiers: .command)
         .disabled(env?.player.hasTrack != true)
+
+        Divider()
+
+        Button("Toggle Shuffle") {
+            env?.player.toggleShuffle()
+        }
+        .keyboardShortcut("S", modifiers: [.command, .shift])
+
+        Button("Cycle Repeat") {
+            guard let env else { return }
+            Task { await env.player.toggleRepeat() }
+        }
+        .keyboardShortcut("R", modifiers: [.command, .shift])
     }
 }
 

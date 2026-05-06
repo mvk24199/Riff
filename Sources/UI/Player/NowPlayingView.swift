@@ -265,6 +265,15 @@ struct NowPlayingView: View {
             ) {
                 Task { await env.player.toggleLike() }
             }
+            // Shuffle — when ON, our `next()` plays a random upcoming
+            // track instead of advancing to the page's natural next.
+            controlButton(
+                systemName: "shuffle",
+                size: 18,
+                tint: env.player.shuffleEnabled ? Theme.red : .white.opacity(0.7)
+            ) {
+                env.player.toggleShuffle()
+            }
             // Skip-back -15s — useful for any track but especially podcasts.
             controlButton(systemName: "gobackward.15", size: 20, tint: .white.opacity(0.85)) {
                 Task { await env.player.skip(by: -15) }
@@ -288,6 +297,15 @@ struct NowPlayingView: View {
             // Skip-forward +30s.
             controlButton(systemName: "goforward.30", size: 20, tint: .white.opacity(0.85)) {
                 Task { await env.player.skip(by: 30) }
+            }
+            // Repeat — currently two-state (off / one). The "1" badge
+            // on `repeat.1` makes the active mode read at a glance.
+            controlButton(
+                systemName: env.player.repeatMode == .one ? "repeat.1" : "repeat",
+                size: 18,
+                tint: env.player.repeatMode == .off ? .white.opacity(0.7) : Theme.red
+            ) {
+                Task { await env.player.toggleRepeat() }
             }
             playbackRateMenu
             addToPlaylistMenu

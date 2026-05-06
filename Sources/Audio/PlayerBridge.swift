@@ -89,6 +89,11 @@ final class PlayerBridge {
         let storedRate   = UserDefaults.standard.object(forKey: Self.rateKey)   as? Double
         self.volume = storedVolume ?? 1.0
         self.playbackRate = storedRate ?? 1.0
+        if let raw = UserDefaults.standard.string(forKey: Self.repeatKey),
+           let mode = RepeatMode(rawValue: raw) {
+            self.repeatMode = mode
+        }
+        self.shuffleEnabled = UserDefaults.standard.bool(forKey: Self.shuffleKey)
         // Eager init: start loading music.youtube.com offscreen at app start,
         // so by the time the user clicks anything the page is loaded.
         self.webBridge = HiddenPlayerWebView()
@@ -100,6 +105,38 @@ final class PlayerBridge {
 
     private static let volumeKey = "player.volume"
     private static let rateKey   = "player.rate"
+    private static let repeatKey = "player.repeat"
+    private static let shuffleKey = "player.shuffle"
+
+    /// Repeat modes. `.off` is YT Music's natural autoplay; `.one`
+    /// loops the current `<video>` source via the browser's native
+    /// loop attribute. Repeat-all isn't shipped yet — it would
+    /// require intercepting end-of-queue and racing the page's
+    /// autoplay, which is fragile. Track for v1.1.
+    enum RepeatMode: String, Sendable {
+        case off, one
+    }
+    private(set) var repeatMode: RepeatMode = .off
+    private(set) var shuffleEnabled: Bool = false
+
+    /// Cycle through repeat modes. Two states for now (off → one →
+    /// off); a future `.all` slot will splice in here.
+    func toggleRepeat() async {
+        let next: RepeatMode = (repeatMode == .off) ? .one : .off
+        repeatMode = next
+        UserDefaults.standard.set(next.rawValue, forKey: Self.repeatKey)
+        await eval("window.musicBridge.setRepeatLoop(\(next == .one ? "true" : "false"))")
+    }
+
+    /// Toggle shuffle. Affects only what `next()` does — see the
+    /// implementation note there. We don't permute `upNext` itself
+    /// because the row order on screen is part of the user's mental
+    /// model ("I see this is coming up next"); shuffling it would
+    /// confuse more than help.
+    func toggleShuffle() {
+        shuffleEnabled.toggle()
+        UserDefaults.standard.set(shuffleEnabled, forKey: Self.shuffleKey)
+    }
 
     struct Track: Hashable {
         let videoId: String
@@ -419,7 +456,25 @@ final class PlayerBridge {
     }
 
     func togglePlay() async { await eval("window.musicBridge.togglePlay()") }
-    func next()       async { await eval("window.musicBridge.next()") }
+    /// Advance to the next track. With shuffle ON we pick a random
+    /// upcoming item and play it directly via `play(item:)` — that
+    /// gives the user-driven "Next" press a randomized order even
+    /// though the visible Up Next list stays in its server order.
+    /// (We deliberately don't permute the on-screen list — see
+    /// `toggleShuffle` for the rationale.)
+    /// With shuffle OFF, fall through to the page's `.next-button`
+    /// click as before.
+    func next() async {
+        if shuffleEnabled, !upNext.isEmpty {
+            let currentId = currentTrack?.videoId
+            let candidates = upNext.filter { $0.id != currentId }
+            if let pick = candidates.randomElement() {
+                await play(item: pick)
+                return
+            }
+        }
+        await eval("window.musicBridge.next()")
+    }
     func previous()   async { await eval("window.musicBridge.previous()") }
     func seek(to fraction: Double) async {
         await eval("window.musicBridge.seek(\(fraction))")
@@ -573,6 +628,13 @@ final class PlayerBridge {
                     }
                     if self.playbackRate != 1.0 {
                         await self.evalWithTimeout(js: "window.musicBridge.setPlaybackRate(\(self.playbackRate))")
+                    }
+                    // Re-arm the <video> loop attribute on every page
+                    // load — YT Music's SPA reuses the same element
+                    // across navigations but doesn't preserve our
+                    // overrides. Cheap and idempotent.
+                    if self.repeatMode == .one {
+                        await self.evalWithTimeout(js: "window.musicBridge.setRepeatLoop(true)")
                     }
                 }
             }

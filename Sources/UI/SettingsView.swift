@@ -131,6 +131,8 @@ struct SettingsView: View {
             shortcutRow("Volume up",       keys: "⌘ ↑")
             shortcutRow("Volume down",     keys: "⌘ ↓")
             shortcutRow("Toggle like",     keys: "⌘ L")
+            shortcutRow("Toggle shuffle",  keys: "⇧ ⌘ S")
+            shortcutRow("Cycle repeat",    keys: "⇧ ⌘ R")
             shortcutRow("Switch tabs",     keys: "⌘ 1 / 2 / 3")
             shortcutRow("Mini Player",     keys: "⌥ ⌘ M")
             shortcutRow("Settings",        keys: "⌘ ,")

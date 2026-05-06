@@ -39,6 +39,15 @@
             const v = videoEl();
             if (v) v.volume = Math.max(0, Math.min(1, level));
         },
+        // Repeat-one is implemented natively on the <video> element via
+        // the loop attribute. When loop=true, the browser restarts the
+        // current source at end-of-stream and YT Music's autoplay
+        // never fires — clean per-track repeat with no DOM dependence.
+        // Repeat-off lets the page's natural autoplay continue.
+        setRepeatLoop(enabled) {
+            const v = videoEl();
+            if (v) v.loop = !!enabled;
+        },
         next()       { document.querySelector(".next-button")?.click(); },
         previous()   { document.querySelector(".previous-button")?.click(); },
         seek(fraction) {
