@@ -1,7 +1,16 @@
 import SwiftUI
 
-/// Tiny sheet that prompts for a playlist name, then creates it and adds
-/// the currently-playing track in one flow.
+/// Tiny sheet that prompts for a playlist name, then creates the
+/// playlist and seeds it from a configurable source. Two modes today
+/// (and easy to extend if more "Create playlist from X" flows show
+/// up):
+///
+///   - **`.currentTrack`** — adds the currently-playing track. The
+///     original flow; reachable from the now-playing add-to-playlist
+///     menu's "New Playlist…" entry.
+///   - **`.queue`** — adds every track currently in `upNext`.
+///     Reachable from the "Save queue" button at the top of the Up
+///     Next pane. Mirrors YT Music's "Save" affordance.
 struct NewPlaylistSheet: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -10,11 +19,17 @@ struct NewPlaylistSheet: View {
     @State private var creating: Bool = false
     @State private var error: String?
 
+    /// Source that seeds the new playlist's first batch of tracks.
+    enum Source: Equatable {
+        case currentTrack
+        case queue
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New Playlist")
+            Text(headline)
                 .font(.system(size: 16, weight: .semibold))
-            Text("Creates a private playlist and adds the currently-playing track.")
+            Text(subheadline)
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.65))
                 .fixedSize(horizontal: false, vertical: true)
@@ -52,14 +67,38 @@ struct NewPlaylistSheet: View {
         .frame(width: 380)
     }
 
+    /// Strings adapt to the source so the sheet is self-explanatory.
+    private var headline: String {
+        switch env.newPlaylistSource {
+        case .currentTrack: return "New Playlist"
+        case .queue:        return "Save Queue as Playlist"
+        }
+    }
+
+    private var subheadline: String {
+        switch env.newPlaylistSource {
+        case .currentTrack:
+            return "Creates a private playlist and adds the currently-playing track."
+        case .queue:
+            let n = env.player.upNext.count
+            return "Creates a private playlist and adds the \(n) track\(n == 1 ? "" : "s") currently in Up Next."
+        }
+    }
+
     private func create() {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         creating = true
         error = nil
+        let source = env.newPlaylistSource
         Task {
             do {
-                _ = try await env.player.createPlaylistWithCurrentTrack(title: trimmed)
+                switch source {
+                case .currentTrack:
+                    _ = try await env.player.createPlaylistWithCurrentTrack(title: trimmed)
+                case .queue:
+                    _ = try await env.player.savePlaylistFromQueue(title: trimmed)
+                }
                 env.reloadUserPlaylists()
                 await MainActor.run {
                     creating = false

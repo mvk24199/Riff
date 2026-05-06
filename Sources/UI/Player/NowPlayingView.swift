@@ -359,7 +359,10 @@ struct NowPlayingView: View {
             if !env.isSignedIn {
                 Text("Sign in to add tracks to your playlists.")
             } else {
-                Button("New Playlist…") { env.isNewPlaylistSheetPresented = true }
+                Button("New Playlist…") {
+                    env.newPlaylistSource = .currentTrack
+                    env.isNewPlaylistSheetPresented = true
+                }
                 Divider()
                 if env.userPlaylistsLoading {
                     Text("Loading…")
@@ -456,6 +459,30 @@ struct NowPlayingView: View {
                     .tracking(1.2)
                     .foregroundStyle(.white.opacity(0.55))
                 Spacer()
+                // "Save queue" — YT Music's Up-Next save affordance.
+                // Disabled when there's nothing to save, hidden when
+                // the user is anonymous (the createPlaylist endpoint
+                // requires a SAPISID cookie session anyway).
+                if env.isSignedIn, !env.player.upNext.isEmpty {
+                    Button {
+                        env.newPlaylistSource = .queue
+                        env.isNewPlaylistSheetPresented = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Save")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.06))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Save these tracks as a new playlist")
+                }
                 Button {
                     tunePopoverOpen = true
                 } label: {

@@ -73,6 +73,7 @@ struct TrackContextMenu: View {
                 // duplicating sheet plumbing.
                 Task {
                     await env.player.play(item: item)
+                    env.newPlaylistSource = .currentTrack
                     env.isNewPlaylistSheetPresented = true
                 }
             }

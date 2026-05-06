@@ -513,6 +513,37 @@ final class PlayerBridge {
         return plid
     }
 
+    /// "Save queue as playlist" — YT Music's Up-Next save action.
+    /// Creates a fresh private playlist and adds every track currently
+    /// in `upNext` (in order). Adds are sequential because YT
+    /// Music's editPlaylist ACTION_ADD_VIDEO doesn't accept a batch
+    /// list — one round-trip per track. Returns the new playlistId.
+    /// Errors after the playlist is created are non-fatal (the
+    /// playlist exists with whatever subset got added before the
+    /// error); we surface the first error to the caller.
+    @discardableResult
+    func savePlaylistFromQueue(title: String) async throws -> String? {
+        // Snapshot the queue so a /next refresh that lands during
+        // this method doesn't change the membership we're saving.
+        let snapshot = upNext
+        guard !snapshot.isEmpty else { return nil }
+        guard let plid = try await innerTube.createPlaylist(title: title) else {
+            return nil
+        }
+        var firstError: Error?
+        for track in snapshot {
+            do {
+                try await innerTube.addToPlaylist(videoId: track.id, playlistId: plid)
+            } catch {
+                if firstError == nil { firstError = error }
+                Log.bridge.error("savePlaylistFromQueue: add failed for \(track.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                // Keep going — partial-saved is better than zero-saved.
+            }
+        }
+        if let firstError { throw firstError }
+        return plid
+    }
+
     /// Insert `item` immediately after the current track in the local
     /// Up Next list — equivalent to YT Music's "Play next". Same caveat
     /// as `removeFromQueue`: the WebView's actual playback queue isn't

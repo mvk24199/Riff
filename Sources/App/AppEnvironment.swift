@@ -49,6 +49,12 @@ final class AppEnvironment {
     /// Drives the "New playlist" name-prompt sheet.
     var isNewPlaylistSheetPresented: Bool = false
 
+    /// Which source seeds the next-presented New Playlist sheet.
+    /// Default is the historical behavior (add current track); the
+    /// "Save queue" button on the Up Next pane flips this to `.queue`
+    /// before raising `isNewPlaylistSheetPresented`.
+    var newPlaylistSource: NewPlaylistSheet.Source = .currentTrack
+
     /// Per-tab navigation paths. Held here so the TopTabBar can pop a tab
     /// to its root when the user taps the already-active tab — standard
     /// "tap home to go home" behaviour.
