@@ -814,9 +814,11 @@ final class InnerTubeClient: @unchecked Sendable {
     }
 
     /// Remove a track from a user-owned playlist. `setVideoId` is the
-    /// per-playlist row identifier (different from the video's `videoId`).
-    /// We don't currently capture it from playlist detail responses; this
-    /// method is plumbing for future use.
+    /// per-playlist row identifier (different from the video's
+    /// `videoId`) — captured by `parseListItem` from each track row's
+    /// `playlistItemData.playlistSetVideoId` and stored on the
+    /// MediaItem. The same videoId can appear multiple times in a
+    /// playlist, so the setVideoId is what disambiguates.
     func removeFromPlaylist(setVideoId: String, videoId: String, playlistId: String) async throws {
         _ = try await postRaw(.editPlaylist, body: [
             "playlistId": playlistId,
@@ -825,6 +827,49 @@ final class InnerTubeClient: @unchecked Sendable {
                 "setVideoId": setVideoId,
                 "removedVideoId": videoId,
             ]],
+        ])
+    }
+
+    /// Rename a user-owned playlist. Requires SAPISID cookie auth.
+    func renamePlaylist(playlistId: String, title: String) async throws {
+        _ = try await postRaw(.editPlaylist, body: [
+            "playlistId": playlistId,
+            "actions": [[
+                "action": "ACTION_SET_PLAYLIST_NAME",
+                "playlistName": title,
+            ]],
+        ])
+    }
+
+    /// Update a user-owned playlist's description. Empty string
+    /// clears it. Requires SAPISID cookie auth.
+    func setPlaylistDescription(playlistId: String, description: String) async throws {
+        _ = try await postRaw(.editPlaylist, body: [
+            "playlistId": playlistId,
+            "actions": [[
+                "action": "ACTION_SET_PLAYLIST_DESCRIPTION",
+                "playlistDescription": description,
+            ]],
+        ])
+    }
+
+    /// Update a user-owned playlist's privacy.
+    func setPlaylistPrivacy(playlistId: String, privacy: PlaylistPrivacy) async throws {
+        _ = try await postRaw(.editPlaylist, body: [
+            "playlistId": playlistId,
+            "actions": [[
+                "action": "ACTION_SET_PLAYLIST_PRIVACY",
+                "playlistPrivacy": privacy.rawValue,
+            ]],
+        ])
+    }
+
+    /// Delete a user-owned playlist. Irreversible — caller is
+    /// responsible for any "are you sure?" confirmation. Requires
+    /// SAPISID cookie auth.
+    func deletePlaylist(playlistId: String) async throws {
+        _ = try await postRaw(.deletePlaylist, body: [
+            "playlistId": playlistId,
         ])
     }
 
@@ -937,7 +982,14 @@ final class InnerTubeClient: @unchecked Sendable {
         // artist" context-menu actions. We accept the first match per
         // kind so a song with multiple artists still resolves to one.
         let (albumId, artistId) = extractAlbumArtistIds(from: r, cols: cols)
-        return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle, thumbnailURL: thumb, albumId: albumId, artistId: artistId)
+        // playlistSetVideoId — present only when the row is rendered
+        // inside a playlist tracklist. Required to remove the row
+        // from its parent playlist later (the same videoId can
+        // appear multiple times so videoId alone is ambiguous).
+        let setVideoId = Parsing.dig(r, ["playlistItemData", "playlistSetVideoId"]) as? String
+        return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle,
+                         thumbnailURL: thumb, albumId: albumId, artistId: artistId,
+                         setVideoId: setVideoId)
     }
 
     /// Variant of `extractAlbumArtistIds` for `playlistPanelVideoRenderer`

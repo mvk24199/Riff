@@ -11,6 +11,16 @@ struct DetailView: View {
     @State private var page: InnerTubeClient.DetailPage?
     @State private var loading = true
     @State private var error: String?
+    @State private var editSheetPresented = false
+
+    /// True when the open detail page represents a playlist owned by
+    /// the signed-in user — checked by id against env.userPlaylists.
+    /// Drives the Edit affordance: only user-owned playlists can be
+    /// renamed / deleted / have tracks removed.
+    private var isUserOwnedPlaylist: Bool {
+        guard item.kind == .playlist else { return false }
+        return env.userPlaylists.contains { $0.id == item.id }
+    }
 
     var body: some View {
         ScrollView {
@@ -45,7 +55,13 @@ struct DetailView: View {
             .padding(.vertical, 24)
         }
         .background(Color.black.ignoresSafeArea())
-        .task(id: item.id) { await load() }
+        .task(id: item.id) {
+            await load()
+            // Make sure userPlaylists is populated so the
+            // isUserOwnedPlaylist check returns the right answer on
+            // first navigation. Cheap when already loaded.
+            env.loadUserPlaylistsIfNeeded()
+        }
     }
 
     private func header(_ page: InnerTubeClient.DetailPage) -> some View {
@@ -95,11 +111,48 @@ struct DetailView: View {
                             .padding(.vertical, 10)
                     }
                     .buttonStyle(.bordered)
+
+                    // Edit menu — visible only on user-owned
+                    // playlists. The endpoints we expose
+                    // (rename / privacy / delete) all require
+                    // ownership, so showing it elsewhere would just
+                    // produce errors on save.
+                    if isUserOwnedPlaylist {
+                        Menu {
+                            Button("Edit Playlist…") {
+                                editSheetPresented = true
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 13, weight: .semibold))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .frame(width: 44)
+                    }
                 }
             }
             Spacer()
         }
         .padding(.horizontal, 32)
+        .sheet(isPresented: $editSheetPresented) {
+            EditPlaylistSheet(
+                playlistId: item.id,
+                initialTitle: page.title.isEmpty ? item.title : page.title,
+                onDeleted: {
+                    // Pop back to the previous nav stack frame so
+                    // the user isn't stranded on a deleted playlist.
+                    // Falls back to no-op if the user was at root.
+                    switch env.activeTab {
+                    case .home:    if !env.homeNavPath.isEmpty    { env.homeNavPath.removeLast()    }
+                    case .search:  if !env.searchNavPath.isEmpty  { env.searchNavPath.removeLast()  }
+                    case .library: if !env.libraryNavPath.isEmpty { env.libraryNavPath.removeLast() }
+                    }
+                }
+            )
+        }
     }
 
     /// Renders the album / playlist tracklist. `fallbackArtwork` is used
@@ -119,7 +172,8 @@ struct DetailView: View {
                     subtitle: track.subtitle,
                     thumbnailURL: track.thumbnailURL ?? fallbackArtwork,
                     albumId: track.albumId,
-                    artistId: track.artistId
+                    artistId: track.artistId,
+                    setVideoId: track.setVideoId
                 )
                 Button {
                     Task { await env.player.play(item: resolved) }
@@ -161,7 +215,19 @@ struct DetailView: View {
                         _ = hovering
                     }
                 )
-                .contextMenu { TrackContextMenu(item: resolved) }
+                .contextMenu {
+                    TrackContextMenu(item: resolved)
+                    // "Remove from this playlist" — only meaningful
+                    // when the open detail page is a user-owned
+                    // playlist AND the row carries a setVideoId
+                    // (parsed by parseListItem from playlistItemData).
+                    if isUserOwnedPlaylist, let setId = resolved.setVideoId {
+                        Divider()
+                        Button("Remove from this playlist") {
+                            Task { await removeFromCurrentPlaylist(track: resolved, setVideoId: setId) }
+                        }
+                    }
+                }
             }
         }
     }
@@ -259,6 +325,37 @@ struct DetailView: View {
             await env.player.playPlaylist(id: plid)
         } else if let first = page.tracks.first {
             await env.player.play(item: backfillArtwork(first, page: page))
+        }
+    }
+
+    /// Issue ACTION_REMOVE_VIDEO and optimistically prune the row
+    /// from the in-memory tracklist so the UI reflects the change
+    /// before /browse re-fetches. The `try?` swallows errors so a
+    /// permission failure (rare; we already gated on ownership)
+    /// doesn't strand the user — the next reload will show the
+    /// authoritative state.
+    private func removeFromCurrentPlaylist(track: MediaItem, setVideoId: String) async {
+        try? await env.innerTube.removeFromPlaylist(
+            setVideoId: setVideoId,
+            videoId: track.id,
+            playlistId: item.id
+        )
+        // Optimistic prune of the local copy so the user sees the
+        // removal immediately. We don't refetch here because that
+        // would scroll the user back to the top; the next time the
+        // page loads it'll be authoritative.
+        if var current = page {
+            let pruned = current.tracks.filter { $0.id != track.id || $0.setVideoId != setVideoId }
+            page = InnerTubeClient.DetailPage(
+                title: current.title,
+                subtitle: current.subtitle,
+                subtitleRuns: current.subtitleRuns,
+                artworkURL: current.artworkURL,
+                playablePlaylistId: current.playablePlaylistId,
+                tracks: pruned,
+                relatedSections: current.relatedSections
+            )
+            _ = current  // silence unused-let warning
         }
     }
 

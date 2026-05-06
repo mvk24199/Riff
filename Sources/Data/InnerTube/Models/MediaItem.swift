@@ -17,4 +17,11 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     /// (e.g. `UCxx…`). Drives "Go to artist". nil when YT didn't
     /// include an artist navigationEndpoint on the row.
     var artistId: String? = nil
+    /// Per-playlist row id for tracks rendered inside a playlist
+    /// detail page. Required by InnerTube's editPlaylist
+    /// `ACTION_REMOVE_VIDEO` (alongside the videoId itself, since
+    /// the same videoId can appear multiple times in a playlist).
+    /// nil for rows reached via search / browse / radio queue —
+    /// those aren't bound to a playlist context.
+    var setVideoId: String? = nil
 }
