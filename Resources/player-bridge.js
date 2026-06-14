@@ -111,14 +111,96 @@
             if (v) v.loop = !!enabled;
         },
 
-        // ── Stub kept for commit-1 backward compat ──
-        // The old "park a URL on the page to navigate from ended" hack.
-        // Commit 2 replaces this with Redux-store queue dispatch (the
-        // real fix), at which point this becomes a no-op. Kept here so
-        // Swift's existing syncPendingNextURL calls don't crash during
-        // the in-flight refactor.
+        // Park a URL the JS-side onStateChange===0 (ended) handler
+        // consumes when the current track ends. Still the workhorse
+        // for "Play next" / "Add to queue" because direct Redux
+        // dispatch into YT's queue store requires constructing full
+        // QueueItem payloads (shape undocumented; needs live page
+        // inspection). The autoplay-interception path is reliable
+        // now that onStateChange replaced the unreliable <video>.ended
+        // we were waiting on. See queueAddViaPage below for the
+        // experimental Redux path that runs alongside this as a
+        // (currently best-effort) primary.
         setPendingNextURL(url) {
             window.__riffPendingNextUrl = url || null;
+        },
+
+        /**
+         * Attempt to inject a track into YT Music's own queue via
+         * direct Redux dispatch. If it works, YT's natural autoplay
+         * picks our injected item up and we don't need
+         * __riffPendingNextUrl at all. If it doesn't, the autoplay-
+         * interception path remains as a fallback.
+         *
+         * Returns true on a successful dispatch, false otherwise.
+         * Both outcomes are logged via the `diagnostic` event so we
+         * can iterate from `log show` output.
+         *
+         * The payload shape used here mirrors what th-ch's
+         * music-together plugin observed YT dispatching internally
+         * (action type 'ADD_ITEMS'). The `items` array expects full
+         * QueueItem objects; we approximate with the minimal shape
+         * YT seems to tolerate (videoId + a synthetic playlistPanel
+         * wrapper). If YT rejects this shape the dispatch is a no-op
+         * — no crash, just a diagnostic.
+         */
+        queueAddViaPage(videoId, position) {
+            const insertAfter = position === 'next';
+            // Try several known queue-element seams.
+            const candidates = [
+                () => document.querySelector('ytmusic-player-bar'),
+                () => document.querySelector('ytmusic-app-layout #queue'),
+                () => document.querySelector('ytmusic-player-queue'),
+                () => document.querySelector('ytmusic-app'),
+            ];
+            let dispatcher = null;
+            let where = null;
+            for (const c of candidates) {
+                try {
+                    const el = c();
+                    if (!el) continue;
+                    // Two known dispatch paths:
+                    //   el.dispatch(...)              — high-level helper on the element
+                    //   el.queue.store.store.dispatch — direct Redux store access
+                    if (typeof el.dispatch === 'function') {
+                        dispatcher = (action) => el.dispatch(action);
+                        where = el.tagName + '.dispatch';
+                        break;
+                    }
+                    if (el.queue && el.queue.store && el.queue.store.store && typeof el.queue.store.store.dispatch === 'function') {
+                        dispatcher = (action) => el.queue.store.store.dispatch(action);
+                        where = el.tagName + '.queue.store.store.dispatch';
+                        break;
+                    }
+                } catch (_) {}
+            }
+            if (!dispatcher) {
+                postEvent({ event: "diagnostic", msg: "queueAddViaPage: no dispatcher found for any queue-element candidate" });
+                return false;
+            }
+            const action = {
+                type: 'ADD_ITEMS',
+                payload: {
+                    // These are guesses based on the QueueElement type
+                    // signature and the music-together intercept. If
+                    // YT's reducer rejects them, the dispatch fails
+                    // silently and the autoplay-interception fallback
+                    // takes over.
+                    items: [{ videoId: videoId }],
+                    nextQueueItemId: insertAfter ? null : undefined,
+                    index: insertAfter ? 0 : undefined,
+                    shuffleEnabled: false,
+                    shouldAssignIds: true,
+                },
+            };
+            try {
+                dispatcher(action);
+                postEvent({ event: "diagnostic", msg: "queueAddViaPage dispatched via " + where + ": " + videoId + " (" + position + ")" });
+                return true;
+            } catch (e) {
+                postEvent({ event: "diagnostic", msg: "queueAddViaPage dispatch threw at " + where + ": " + (e && e.message ? e.message : String(e)) });
+                return false;
+            }
         },
 
         next()     { document.querySelector(".next-button")?.click(); },

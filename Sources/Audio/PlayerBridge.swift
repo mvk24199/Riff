@@ -774,7 +774,18 @@ final class PlayerBridge {
     func playNext(item: MediaItem) {
         queue.playNext(item)
         userQueuedIds.insert(item.id)
-        Task { await syncPendingNextURL() }
+        // Two paths fire in parallel:
+        //   1. Best-effort Redux dispatch into YT's own queue. If
+        //      YT accepts it, its natural autoplay picks our item
+        //      next and the interception below becomes unnecessary.
+        //   2. The legacy autoplay-interception via setPendingNextURL
+        //      stays armed as a fallback. Both paths are idempotent —
+        //      if (1) works we just get a slightly redundant nav, and
+        //      we wipe the legacy flow once telemetry confirms.
+        Task {
+            await tryQueueAddViaPage(videoId: item.id, position: "next")
+            await syncPendingNextURL()
+        }
     }
 
     /// Append `item` to the bottom of the local Up Next list — YT
@@ -785,7 +796,20 @@ final class PlayerBridge {
     func addToQueueEnd(item: MediaItem) {
         queue.addToEnd(item)
         userQueuedIds.insert(item.id)
-        Task { await syncPendingNextURL() }
+        Task {
+            await tryQueueAddViaPage(videoId: item.id, position: "end")
+            await syncPendingNextURL()
+        }
+    }
+
+    /// Fire the JS-side experimental Redux-dispatch path. Outcome is
+    /// logged by the JS bridge via the `diagnostic` channel; we don't
+    /// branch on success/failure here because the fallback path
+    /// (setPendingNextURL + onStateChange===0 interception) is always
+    /// armed alongside.
+    private func tryQueueAddViaPage(videoId: String, position: String) async {
+        let js = "window.musicBridge.queueAddViaPage(\(videoId.jsonQuoted), \(position.jsonQuoted))"
+        await eval(js)
     }
 
     /// Advance to the head user-queued item if one exists. Returns
