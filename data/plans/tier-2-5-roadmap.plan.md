@@ -45,9 +45,14 @@ status: executing        # draft → approved → executing → done
 - [ ] **6. Mixed-for-you Library section**
       files: LibraryView.swift, InnerTubeClient.swift
       prework: confirm `FEmusic_mixed_for_you` browseId against live YT Music
-- [ ] **7. Explore tab** (largest single step)
+- [x] **7. Explore tab** (largest single step)
       files: AppEnvironment.swift, RiffApp.swift, new Sources/UI/Explore/ExploreView.swift,
-             InnerTubeClient.swift (new explore() + moodsAndGenres())
+             InnerTubeClient.swift (new browseExplore() + browseMoodsAndGenres())
+      note: response shape is identical to Home (musicCarouselShelfRenderer
+            shelves), so ExploreView reuses HomeSection + HomeSectionRow.
+            Two /browse calls fire in parallel via async let. Sections
+            filtered through env.isBlocked() so block-list applies to
+            Explore too.
 - [ ] **8. Volume normalization toggle (approximate)**
       files: PlayerBridge.swift, Resources/player-bridge.js, SettingsView.swift
 - [ ] **9. Per-kind playback rate defaults**

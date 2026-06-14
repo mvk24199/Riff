@@ -97,7 +97,7 @@ private struct MiniPlayerMenuItem: View {
     }
 }
 
-/// View menu entries that switch the active main tab via ⌘1 / ⌘2 / ⌘3.
+/// View menu entries that switch the active main tab via ⌘1 / ⌘2 / ⌘3 / ⌘4.
 /// Promoted out of MainTabs so we can read the AppEnvironment at the
 /// command-builder layer.
 private struct TabSwitchMenuItems: View {
@@ -107,11 +107,14 @@ private struct TabSwitchMenuItems: View {
         Button("Home") { env?.activeTab = .home }
             .keyboardShortcut("1", modifiers: .command)
             .disabled(env == nil)
-        Button("Search") { env?.activeTab = .search }
+        Button("Explore") { env?.activeTab = .explore }
             .keyboardShortcut("2", modifiers: .command)
             .disabled(env == nil)
-        Button("Library") { env?.activeTab = .library }
+        Button("Search") { env?.activeTab = .search }
             .keyboardShortcut("3", modifiers: .command)
+            .disabled(env == nil)
+        Button("Library") { env?.activeTab = .library }
+            .keyboardShortcut("4", modifiers: .command)
             .disabled(env == nil)
     }
 }
@@ -267,6 +270,7 @@ struct MainTabs: View {
             Group {
                 switch env.activeTab {
                 case .home:    HomeView()
+                case .explore: ExploreView()
                 case .search:  SearchView()
                 case .library: LibraryView()
                 }
@@ -281,6 +285,7 @@ struct TopTabBar: View {
     var body: some View {
         HStack(spacing: 24) {
             tab("Home", .home)
+            tab("Explore", .explore)
             tab("Search", .search)
             tab("Library", .library)
             Spacer()
@@ -298,6 +303,7 @@ struct TopTabBar: View {
             if env.activeTab == value {
                 switch value {
                 case .home:    env.homeNavPath = NavigationPath()
+                case .explore: env.exploreNavPath = NavigationPath()
                 case .search:  env.searchNavPath = NavigationPath()
                 case .library: env.libraryNavPath = NavigationPath()
                 }

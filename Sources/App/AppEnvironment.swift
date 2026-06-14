@@ -4,10 +4,10 @@ import SwiftUI
 import AppKit
 
 /// Top-level tab identifier. Lifted out of `MainTabs` so the app-level
-/// `CommandGroup` (which doesn't see private nested types) can bind ⌘1/2/3
-/// shortcuts to switch tabs.
+/// `CommandGroup` (which doesn't see private nested types) can bind
+/// ⌘1/2/3/4 shortcuts to switch tabs.
 enum AppTab: Hashable {
-    case home, search, library
+    case home, explore, search, library
 }
 
 @MainActor
@@ -64,6 +64,7 @@ final class AppEnvironment {
     /// to its root when the user taps the already-active tab — standard
     /// "tap home to go home" behaviour.
     var homeNavPath = NavigationPath()
+    var exploreNavPath = NavigationPath()
     var searchNavPath = NavigationPath()
     var libraryNavPath = NavigationPath()
 
@@ -160,6 +161,7 @@ final class AppEnvironment {
         }
         switch activeTab {
         case .home:    homeNavPath.append(item)
+        case .explore: exploreNavPath.append(item)
         case .search:  searchNavPath.append(item)
         case .library: libraryNavPath.append(item)
         }

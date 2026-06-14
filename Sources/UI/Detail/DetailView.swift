@@ -157,6 +157,7 @@ struct DetailView: View {
                     // Falls back to no-op if the user was at root.
                     switch env.activeTab {
                     case .home:    if !env.homeNavPath.isEmpty    { env.homeNavPath.removeLast()    }
+                    case .explore: if !env.exploreNavPath.isEmpty { env.exploreNavPath.removeLast() }
                     case .search:  if !env.searchNavPath.isEmpty  { env.searchNavPath.removeLast()  }
                     case .library: if !env.libraryNavPath.isEmpty { env.libraryNavPath.removeLast() }
                     }

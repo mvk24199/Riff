@@ -96,6 +96,39 @@ final class InnerTubeClient: @unchecked Sendable {
         return sections
     }
 
+    /// Fetch the Explore feed — Charts, New releases, Moods & genres,
+    /// Featured playlists, etc. Same response shape as the Home feed
+    /// (musicCarouselShelfRenderer + musicShelfRenderer + gridRenderer
+    /// shelves under a singleColumnBrowseResultsRenderer), so we
+    /// reuse parseHomeShelf without extra parser work.
+    ///
+    /// We DON'T follow continuation tokens here: Explore is curated
+    /// and finite by design — initial shelves are the surface YT
+    /// intends users to land on. Continuations would just pull in
+    /// long-tail content.
+    func browseExplore() async throws -> [HomeSection] {
+        let body = try await postRaw(.browse, body: ["browseId": BrowseID.explore])
+        let shelves = Parsing.array(body, "contents",
+            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        let sections = shelves.compactMap(Self.parseHomeShelf)
+        Log.innertube.debug("explore sections=\(sections.count) shelfKinds=\(shelves.compactMap { Array($0.keys).first }, privacy: .public)")
+        return sections
+    }
+
+    /// Fetch the Moods & Genres feed — a flat list of mood/genre
+    /// "tile" items, each pointing to a curated playlist when tapped.
+    /// Reuses parseHomeShelf for the same reason browseExplore does.
+    func browseMoodsAndGenres() async throws -> [HomeSection] {
+        let body = try await postRaw(.browse, body: ["browseId": BrowseID.moodsAndGenres])
+        let shelves = Parsing.array(body, "contents",
+            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        let sections = shelves.compactMap(Self.parseHomeShelf)
+        Log.innertube.debug("moodsAndGenres sections=\(sections.count)")
+        return sections
+    }
+
     /// Walk a /browse response (initial or continuation-chunk) and return
     /// the next continuation token, if YT included one.
     private static func findContinuationToken(in body: [String: Any]) -> String? {
