@@ -112,6 +112,7 @@ final class PlayerBridge {
             self.repeatMode = mode
         }
         self.shuffleEnabled = UserDefaults.standard.bool(forKey: Self.shuffleKey)
+        self.normalizationEnabled = UserDefaults.standard.bool(forKey: Self.normalizationKey)
         // Eager init: start loading music.youtube.com offscreen at app start,
         // so by the time the user clicks anything the page is loaded.
         self.webBridge = HiddenPlayerWebView()
@@ -129,6 +130,7 @@ final class PlayerBridge {
     private static let rateKey   = "player.rate"
     private static let repeatKey = "player.repeat"
     private static let shuffleKey = "player.shuffle"
+    private static let normalizationKey = "player.normalizationEnabled"
     private static let lastSessionKey = "player.lastSession"
 
     /// Snapshot of "what was playing when the user quit" — mirrors YT
@@ -945,6 +947,19 @@ final class PlayerBridge {
         await eval("window.musicBridge.setVolume(\(clamped))")
     }
 
+    /// Approximate per-track loudness normalization. JS-side measures
+    /// ~5s of RMS post-skip and scales a Web Audio GainNode toward
+    /// -18 dBFS. Off by default — the toggle lives in Settings →
+    /// Playback. The native `<video>.volume` (driven by `setVolume`)
+    /// still works as the user-facing volume; both attenuations
+    /// multiply through the audio path.
+    private(set) var normalizationEnabled: Bool = false
+    func setNormalizationEnabled(_ enabled: Bool) async {
+        normalizationEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: Self.normalizationKey)
+        await eval("window.musicBridge.setNormalizationEnabled(\(enabled))")
+    }
+
     /// Per-call timeout for JS evaluation. A hung WKWebView (e.g. an
     /// unresponsive page) shouldn't leave our awaiting Task pending forever
     /// — that's how UI commands silently stop working without an error to
@@ -1018,6 +1033,9 @@ final class PlayerBridge {
                     // overrides. Cheap and idempotent.
                     if self.repeatMode == .one {
                         await self.evalWithTimeout(js: "window.musicBridge.setRepeatLoop(true)")
+                    }
+                    if self.normalizationEnabled {
+                        await self.evalWithTimeout(js: "window.musicBridge.setNormalizationEnabled(true)")
                     }
                 }
             }

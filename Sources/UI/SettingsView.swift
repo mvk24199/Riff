@@ -42,6 +42,8 @@ struct SettingsView: View {
                     Divider().background(Theme.divider)
                     keyboardShortcutsSection
                     Divider().background(Theme.divider)
+                    playbackSection
+                    Divider().background(Theme.divider)
                     libraryAccessSection
                     if !env.blockedArtistIds.isEmpty {
                         Divider().background(Theme.divider)
@@ -142,6 +144,32 @@ struct SettingsView: View {
             shortcutRow("Settings",        keys: "⌘ ,")
             shortcutRow("Close player",    keys: "⎋")
             shortcutRow("Quit",            keys: "⌘ Q")
+        }
+    }
+
+    private var playbackSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Playback")
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Volume normalization")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                    Text("Smooths loudness between tracks by measuring each new track and adjusting gain toward a fixed target. Approximate — measured in-browser, not LUFS-accurate.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Toggle("", isOn: Binding(
+                    get: { env.player.normalizationEnabled },
+                    set: { newValue in
+                        Task { await env.player.setNormalizationEnabled(newValue) }
+                    }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+            }
         }
     }
 

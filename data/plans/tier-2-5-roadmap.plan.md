@@ -53,8 +53,14 @@ status: executing        # draft → approved → executing → done
             Two /browse calls fire in parallel via async let. Sections
             filtered through env.isBlocked() so block-list applies to
             Explore too.
-- [ ] **8. Volume normalization toggle (approximate)**
+- [x] **8. Volume normalization toggle (approximate)**
       files: PlayerBridge.swift, Resources/player-bridge.js, SettingsView.swift
+      note: Web Audio graph (source → analyser → gain → destination)
+            on the offscreen <video>. ~5s post-skip RMS sample, gain
+            scaled toward -18 dBFS RMS, clamped [0.4, 2.5]. Off by
+            default; toggle in Settings → Playback. <video>.volume
+            still drives the user-facing volume — both attenuations
+            multiply.
 - [ ] **9. Per-kind playback rate defaults**
       files: PlayerBridge.swift, NowPlayingView.swift, Tests/QueueAndResolverTests.swift
 - [ ] **10. Share URL + Lyric image cards**

@@ -102,6 +102,19 @@
             if (v) v.volume = Math.max(0, Math.min(1, level));
         },
 
+        // Approximate per-track loudness normalization. Routes the
+        // <video> element through a Web Audio graph (source → analyser
+        // → gain → destination), samples ~5s of post-skip RMS, and
+        // sets gain to land near -18 dBFS RMS. Not LUFS-accurate, but
+        // catches the loud-pop-into-quiet-acoustic gap that's the
+        // user-visible failure mode. Off by default.
+        setNormalizationEnabled(on) {
+            if (!window.__riffNorm) return;
+            window.__riffNorm.init();
+            window.__riffNorm.setEnabled(on);
+            if (on) window.__riffNorm.startMeasuring();
+        },
+
         // Repeat-one via the <video>.loop attribute. When loop=true the
         // browser restarts the source at end-of-stream and YT Music's
         // autoplay never fires. Clean per-track repeat with no DOM
@@ -295,8 +308,15 @@
         // populated data — so Swift never gets stuck with a blank
         // title row.
         if (vd.video_id === lastVideoId && lastEmittedHadTitle && reason !== "force") return;
+        const videoIdChanged = vd.video_id !== lastVideoId;
         lastVideoId = vd.video_id;
         lastEmittedHadTitle = title !== "";
+        // Re-arm normalization measurement on a real track switch.
+        // The dedup gate above prevents this from firing on the
+        // late-arriving metadata re-emit for the same track.
+        if (videoIdChanged && window.__riffNorm && window.__riffNorm.enabled) {
+            window.__riffNorm.startMeasuring();
+        }
         let artwork = null;
         if (md && md.artwork && md.artwork.length > 0) {
             artwork = md.artwork[md.artwork.length - 1].src;
@@ -473,6 +493,108 @@
             });
         }
     }
+
+    // ---- Volume normalization (Web Audio RMS-based) ------------------------
+    //
+    // Routes the <video> element through a Web Audio graph so we can
+    // (a) measure short-window RMS post-skip and (b) apply a per-track
+    // gain to land near a fixed target. The native <video>.volume
+    // attribute still works as the user-facing volume control — it
+    // attenuates pre-graph; our GainNode scales post-graph; both
+    // multiply.
+    //
+    // Target: -18 dBFS RMS. Approximation of -14 LUFS (the streaming
+    // standard) without K-weighted filtering. Catches the loud-pop /
+    // quiet-acoustic gap that's the user-visible failure mode.
+    //
+    // Measurement window: skip 500ms (fade-in), sample 5s, then apply.
+    // Gain clamp: [0.4, 2.5] to avoid clipping or excessive boost.
+    const norm = {
+        ctx: null, sourceNode: null, gainNode: null, analyser: null, timeData: null,
+        enabled: false, measuring: false, measureStart: 0, sumSquares: 0, sampleCount: 0,
+
+        init() {
+            if (this.ctx) return;
+            const v = videoEl();
+            if (!v) return;
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                this.ctx = new AC();
+                this.sourceNode = this.ctx.createMediaElementSource(v);
+                this.gainNode = this.ctx.createGain();
+                this.gainNode.gain.value = 1.0;
+                this.analyser = this.ctx.createAnalyser();
+                this.analyser.fftSize = 2048;
+                this.timeData = new Uint8Array(this.analyser.fftSize);
+                this.sourceNode.connect(this.analyser);
+                this.analyser.connect(this.gainNode);
+                this.gainNode.connect(this.ctx.destination);
+            } catch (e) {
+                postEvent({ event: "diagnostic", msg: "norm init failed: " + (e && e.message ? e.message : e) });
+                this.ctx = null;
+            }
+        },
+
+        setEnabled(on) {
+            this.enabled = !!on;
+            if (!on && this.gainNode && this.ctx) {
+                this.gainNode.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.05);
+                this.measuring = false;
+            }
+        },
+
+        startMeasuring() {
+            if (!this.enabled || !this.ctx) return;
+            if (this.ctx.state === "suspended") {
+                this.ctx.resume().catch(() => {});
+            }
+            this.sumSquares = 0;
+            this.sampleCount = 0;
+            this.measuring = true;
+            this.measureStart = this.ctx.currentTime;
+            // Reset gain immediately on track change so a previous
+            // loud-track boost doesn't bleed into a quiet track.
+            if (this.gainNode) {
+                this.gainNode.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.05);
+            }
+        },
+
+        tick() {
+            if (!this.measuring || !this.analyser || !this.timeData) return;
+            const skipMs = 500;
+            const windowMs = 5000;
+            const elapsedMs = (this.ctx.currentTime - this.measureStart) * 1000;
+            if (elapsedMs < skipMs) return;
+            if (elapsedMs > skipMs + windowMs) {
+                this.apply();
+                this.measuring = false;
+                return;
+            }
+            this.analyser.getByteTimeDomainData(this.timeData);
+            // Byte time-domain is 0..255 with 128 = silence. Map to -1..1.
+            let sum = 0;
+            for (let i = 0; i < this.timeData.length; i++) {
+                const x = (this.timeData[i] - 128) / 128;
+                sum += x * x;
+            }
+            this.sumSquares += sum;
+            this.sampleCount += this.timeData.length;
+        },
+
+        apply() {
+            if (!this.sampleCount || !this.gainNode || !this.ctx) return;
+            const rms = Math.sqrt(this.sumSquares / this.sampleCount);
+            if (rms < 1e-5) return;
+            const measuredDb = 20 * Math.log10(rms);
+            const targetDb = -18;
+            let gain = Math.pow(10, (targetDb - measuredDb) / 20);
+            gain = Math.max(0.4, Math.min(2.5, gain));
+            this.gainNode.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.3);
+            postEvent({ event: "diagnostic", msg: "norm rms=" + rms.toFixed(4) + "dB=" + measuredDb.toFixed(1) + " gain=" + gain.toFixed(2) });
+        },
+    };
+    window.__riffNorm = norm;
+    setInterval(() => norm.tick(), 100);
 
     // ---- Kick off ---------------------------------------------------------
 
