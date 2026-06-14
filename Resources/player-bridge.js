@@ -181,12 +181,27 @@
             const action = {
                 type: 'ADD_ITEMS',
                 payload: {
-                    // These are guesses based on the QueueElement type
-                    // signature and the music-together intercept. If
-                    // YT's reducer rejects them, the dispatch fails
-                    // silently and the autoplay-interception fallback
-                    // takes over.
-                    items: [{ videoId: videoId }],
+                    // YT's reducer (CZ(d).navigationEndpoint per the
+                    // first-pass diagnostic) expects each item to carry
+                    // a watchEndpoint navigation node. The minimal
+                    // shape YT accepts looks like a stripped-down
+                    // playlistPanelVideoRenderer.
+                    items: [{
+                        videoId: videoId,
+                        navigationEndpoint: {
+                            watchEndpoint: { videoId: videoId },
+                        },
+                        // Wrap in the renderer envelope YT uses
+                        // internally — sometimes the reducer keys
+                        // off `.playlistPanelVideoRenderer` on the
+                        // item rather than the item itself.
+                        playlistPanelVideoRenderer: {
+                            videoId: videoId,
+                            navigationEndpoint: {
+                                watchEndpoint: { videoId: videoId },
+                            },
+                        },
+                    }],
                     nextQueueItemId: insertAfter ? null : undefined,
                     index: insertAfter ? 0 : undefined,
                     shuffleEnabled: false,
@@ -222,6 +237,7 @@
     // ---- Track-change + state-change handling ------------------------------
 
     let lastVideoId = "";
+    let lastEmittedHadTitle = false;
     let stickyPlaylistId = null;
 
     function findPlaylistId() {
@@ -264,12 +280,24 @@
         const found = findPlaylistId();
         if (found) stickyPlaylistId = found;
         const playlistId = stickyPlaylistId;
-        if (vd.video_id === lastVideoId && reason !== "force") return;
-        lastVideoId = vd.video_id;
-        // Artwork: mediaSession is more reliable than vd for the high-res
-        // image. We pick the last (largest) entry.
-        let artwork = null;
+        // Compose the best title/artist we currently have from the
+        // two sources. videodatachange's 'dataloaded' event often
+        // fires BEFORE getVideoData populates title/author — the
+        // canonical data lands on the subsequent 'dataupdated'
+        // event. mediaSession.metadata fills in on its own clock.
         const md = navigator.mediaSession && navigator.mediaSession.metadata;
+        const title = vd.title || (md && md.title) || "";
+        const artist = vd.author || (md && md.artist) || "";
+        // Dedup gating: skip if the videoId matches the last emit AND
+        // we already emitted with non-empty title. This allows a
+        // re-emit when an earlier emit had empty metadata (track
+        // change just landed, getVideoData still empty) and now has
+        // populated data — so Swift never gets stuck with a blank
+        // title row.
+        if (vd.video_id === lastVideoId && lastEmittedHadTitle && reason !== "force") return;
+        lastVideoId = vd.video_id;
+        lastEmittedHadTitle = title !== "";
+        let artwork = null;
         if (md && md.artwork && md.artwork.length > 0) {
             artwork = md.artwork[md.artwork.length - 1].src;
         }
@@ -277,8 +305,8 @@
             event: "trackChanged",
             videoId: vd.video_id,
             playlistId: playlistId,
-            title: vd.title || (md && md.title) || "",
-            artist: vd.author || (md && md.artist) || "",
+            title: title,
+            artist: artist,
             artwork: artwork,
         });
     }
@@ -331,6 +359,14 @@
         // immediately on (re)attach instead of waiting for the first
         // playerApi event.
         emitTrackChanged("force");
+        // Safety-net poll: videodatachange's 'dataupdated' event isn't
+        // always reliable — th-ch documents the same. A 2s poll
+        // re-evaluates and re-emits if metadata finally landed (the
+        // dedup gate in emitTrackChanged guards against redundant
+        // emits when nothing changed). Cheap enough to leave running.
+        if (!window.__riffSafetyPollId) {
+            window.__riffSafetyPollId = setInterval(() => emitTrackChanged("safety-poll"), 2000);
+        }
     }
 
     // ---- <video> listeners (progress only — state moved to onStateChange) --
