@@ -59,8 +59,26 @@ struct TrackContextMenu: View {
                 // surfacing of the artist (Home carousels, Search
                 // results, /next radio, /related). Removable from
                 // Settings → Library → Blocked Artists.
+                //
+                // For song rows: the subtitle holds the artist name
+                // ("Bruno Mars · 24K Magic · 2016") so we take
+                // everything up to the first " · " separator. For
+                // artist tiles the row title IS the artist name.
                 Button("Don't recommend this artist") {
-                    env.blockArtist(id: artistId)
+                    let nameGuess: String
+                    if item.kind == .artist {
+                        nameGuess = item.title
+                    } else {
+                        // Split on " · " or "•" — both the dotted YT
+                        // separator and the legacy bullet show up in
+                        // search subtitles. trimming handles spaces.
+                        let firstSegment = item.subtitle
+                            .split(whereSeparator: { $0 == "·" || $0 == "•" })
+                            .first
+                            .map { String($0).trimmingCharacters(in: .whitespaces) } ?? item.subtitle
+                        nameGuess = firstSegment
+                    }
+                    env.blockArtist(id: artistId, name: nameGuess)
                 }
             }
         }

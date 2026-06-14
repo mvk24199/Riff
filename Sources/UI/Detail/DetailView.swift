@@ -203,6 +203,15 @@ struct DetailView: View {
                                 .lineLimit(1)
                         }
                         Spacer()
+                        // Per-track duration — shown when the parser
+                        // captured it. Albums almost always provide
+                        // it; some "Songs" search shelves omit it.
+                        if let secs = track.durationSeconds {
+                            Text(formatTrackDuration(secs))
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.55))
+                                .padding(.trailing, 8)
+                        }
                     }
                     .padding(.vertical, 8)
                     .padding(.horizontal, 32)
@@ -287,6 +296,19 @@ struct DetailView: View {
                     .padding(.horizontal, 32)
             }
         }
+    }
+
+    /// Per-row duration formatter — matches the search-result-row
+    /// convention. Local to DetailView so we don't bind to a UI
+    /// helper from a different module.
+    private func formatTrackDuration(_ totalSeconds: Int) -> String {
+        let h = totalSeconds / 3600
+        let m = (totalSeconds % 3600) / 60
+        let s = totalSeconds % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
     }
 
     private var kindLabel: String {

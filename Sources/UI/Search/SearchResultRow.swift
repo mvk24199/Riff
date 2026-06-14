@@ -1,5 +1,56 @@
 import SwiftUI
 
+// MARK: - Shared subtitle formatting
+
+/// Map a MediaItem.Kind to the human-readable prefix shown in search
+/// subtitles ("Song", "Album", "Artist", …). Used by both the list
+/// row and the top-result hero card.
+fileprivate func kindLabelString(_ kind: MediaItem.Kind) -> String {
+    switch kind {
+    case .song:     return "Song"
+    case .album:    return "Album"
+    case .playlist: return "Playlist"
+    case .artist:   return "Artist"
+    case .podcast:  return "Podcast"
+    case .episode:  return "Episode"
+    }
+}
+
+/// Compose "Kind • Artist • 3:42" / "Album • Artist • 2024" from the
+/// parsed subtitle plus the new duration/year fields. Skips the kind
+/// prefix when the subtitle already starts with it, skips duration
+/// when the subtitle already contains a colon-separated time token,
+/// and skips year when the subtitle already contains that 4-digit
+/// year — keeps the line tidy when YT already gave us a fully-formed
+/// subtitle and we don't want to append duplicates.
+fileprivate func formatSearchSubtitle(_ item: MediaItem, kindLabel: String) -> String {
+    let trimmed = item.subtitle.trimmingCharacters(in: .whitespaces)
+    var line = trimmed
+    if line.isEmpty {
+        line = kindLabel
+    } else if !line.lowercased().hasPrefix(kindLabel.lowercased()) {
+        line = "\(kindLabel) • \(line)"
+    }
+    if let secs = item.durationSeconds, !line.contains(":") {
+        line += " • " + formatDurationLabel(secs)
+    }
+    if let y = item.year, !line.contains(String(y)) {
+        line += " • \(y)"
+    }
+    return line
+}
+
+/// Compact mm:ss / h:mm:ss formatter used in search rows + tracklists.
+fileprivate func formatDurationLabel(_ totalSeconds: Int) -> String {
+    let h = totalSeconds / 3600
+    let m = (totalSeconds % 3600) / 60
+    let s = totalSeconds % 60
+    if h > 0 {
+        return String(format: "%d:%02d:%02d", h, m, s)
+    }
+    return String(format: "%d:%02d", m, s)
+}
+
 /// One row in the search results list. Mirrors YT Music's compact list
 /// layout: small square thumbnail, bold title, subtitle prefixed with
 /// the kind ("Song • Artist • plays" / "Album • Artist • year").
@@ -99,24 +150,14 @@ struct SearchResultRow: View {
     /// "Kind • subtitle" for visual parity with YT Music search rows
     /// ("Album • Ravindra Jain • 2021"). When the parsed subtitle
     /// already starts with the kind label we don't double up.
+    /// Appends duration ("• 3:42") for songs/episodes that carry one,
+    /// and the year for items that have it without already being in
+    /// the subtitle text.
     private var formattedSubtitle: String {
-        let kind = kindLabel
-        let trimmed = item.subtitle.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return kind }
-        if trimmed.lowercased().hasPrefix(kind.lowercased()) { return trimmed }
-        return "\(kind) • \(trimmed)"
+        formatSearchSubtitle(item, kindLabel: kindLabel)
     }
 
-    private var kindLabel: String {
-        switch item.kind {
-        case .song:     return "Song"
-        case .album:    return "Album"
-        case .playlist: return "Playlist"
-        case .artist:   return "Artist"
-        case .podcast:  return "Podcast"
-        case .episode:  return "Episode"
-        }
-    }
+    private var kindLabel: String { kindLabelString(item.kind) }
 
     private func play() async {
         switch item.kind {
@@ -213,23 +254,10 @@ struct TopResultCard: View {
     }
 
     private var formattedSubtitle: String {
-        let kind = kindLabel
-        let trimmed = item.subtitle.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return kind }
-        if trimmed.lowercased().hasPrefix(kind.lowercased()) { return trimmed }
-        return "\(kind) • \(trimmed)"
+        formatSearchSubtitle(item, kindLabel: kindLabel)
     }
 
-    private var kindLabel: String {
-        switch item.kind {
-        case .song:     return "Song"
-        case .album:    return "Album"
-        case .playlist: return "Playlist"
-        case .artist:   return "Artist"
-        case .podcast:  return "Podcast"
-        case .episode:  return "Episode"
-        }
-    }
+    private var kindLabel: String { kindLabelString(item.kind) }
 
     private func play() async {
         switch item.kind {

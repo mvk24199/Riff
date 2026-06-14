@@ -174,16 +174,20 @@ struct SettingsView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.65))
                 .fixedSize(horizontal: false, vertical: true)
-            // Sorted by id for deterministic display; we don't fetch
-            // human-readable artist names (would require an extra
-            // /browse round-trip per id at Settings-open time). Worth
-            // upgrading later — for now the id is the affordance.
-            ForEach(Array(env.blockedArtistIds).sorted(), id: \.self) { id in
+            // Display the captured artist name (falls back to id only
+            // for legacy entries migrated from the old Set<String>
+            // storage — those upgrade on the next re-block).
+            ForEach(env.blockedArtistIds, id: \.self) { id in
                 HStack {
-                    Text(id)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(env.blockedArtistName(id: id))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white)
+                        Text(id)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .textSelection(.enabled)
+                    }
                     Spacer()
                     Button("Unblock") {
                         env.unblockArtist(id: id)
@@ -191,7 +195,7 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, 4)
             }
         }
     }

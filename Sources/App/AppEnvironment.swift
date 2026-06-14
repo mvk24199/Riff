@@ -67,53 +67,82 @@ final class AppEnvironment {
     /// CommandGroup can drive it via ⌘1 / ⌘2 / ⌘3 keyboard shortcuts.
     var activeTab: AppTab = .home
 
-    /// Set of artist browseIds the user has chosen never to see again.
-    /// Mirrors YT Music's "Don't recommend this artist" affordance —
-    /// items whose `artistId` is in this set are filtered out of
-    /// surfaces that show recommendations (Home carousels, Search
-    /// results, /next radio queues, /related songs).
+    /// Map of artist browseId → display name for artists the user has
+    /// chosen never to see again. Items whose `artistId` is in the map
+    /// get filtered from Home carousels, Search results, /next radio
+    /// queues, and /related songs.
     ///
-    /// Stored under `library.blockedArtistIds` in UserDefaults so it
-    /// survives sign-out + relaunch. Server-side propagation isn't
-    /// possible without a YT API for "block artist" (none documented),
-    /// so this is client-side only — same caveat as `removeFromQueue`:
-    /// the WebView's autoplay can still pick a blocked artist when
-    /// the current track ends. We don't pretend otherwise; the
-    /// settings panel explains the limit.
-    private(set) var blockedArtistIds: Set<String> = []
-    private static let blockedArtistIdsKey = "library.blockedArtistIds"
+    /// We store the name alongside the id (rather than just the id, as
+    /// the original `Set<String>` did) so Settings can render a useful
+    /// row label instead of opaque `UCxx…` ids.
+    ///
+    /// Stored under `library.blockedArtists` in UserDefaults — a fresh
+    /// key, so the legacy `library.blockedArtistIds` set is silently
+    /// migrated on first load (names default to the id until the user
+    /// re-encounters and re-blocks the artist).
+    ///
+    /// Client-side only: server-side propagation isn't possible
+    /// without a YT API for "block artist" (none documented). YT
+    /// Music's autoplay can still pick a blocked artist when the
+    /// current track ends — settings text spells that out.
+    private(set) var blockedArtists: [String: String] = [:]
+    private static let blockedArtistsKey = "library.blockedArtists"
+    private static let legacyBlockedArtistIdsKey = "library.blockedArtistIds"
+
+    /// Sorted ids, exposed read-only for views that need stable iteration.
+    var blockedArtistIds: [String] { blockedArtists.keys.sorted() }
+
+    func blockedArtistName(id: String) -> String {
+        blockedArtists[id] ?? id  // fall back to id when migrating from legacy storage
+    }
 
     func isBlocked(artistId: String?) -> Bool {
         guard let id = artistId, !id.isEmpty else { return false }
-        return blockedArtistIds.contains(id)
+        return blockedArtists[id] != nil
     }
 
     func isBlocked(_ item: MediaItem) -> Bool {
         // Block by artist match OR when the item itself IS the blocked
         // artist (e.g. an Artist tile in a search-result list).
-        if item.kind == .artist && blockedArtistIds.contains(item.id) { return true }
+        if item.kind == .artist && blockedArtists[item.id] != nil { return true }
         return isBlocked(artistId: item.artistId)
     }
 
-    func blockArtist(id: String) {
+    /// Block by id + capture the human-readable name in one call.
+    /// Callers from track context menus already have both (the
+    /// MediaItem carries title for artist tiles, or carries the
+    /// subtitle which holds the artist name for song rows).
+    func blockArtist(id: String, name: String) {
         guard !id.isEmpty else { return }
-        blockedArtistIds.insert(id)
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        // Don't let an empty name overwrite an existing one — if the
+        // caller passes "" we keep whatever name we previously knew.
+        blockedArtists[id] = trimmed.isEmpty ? (blockedArtists[id] ?? id) : trimmed
         persistBlockedArtists()
     }
 
     func unblockArtist(id: String) {
-        blockedArtistIds.remove(id)
+        blockedArtists.removeValue(forKey: id)
         persistBlockedArtists()
     }
 
     private func persistBlockedArtists() {
-        let arr = Array(blockedArtistIds).sorted()  // sorted for deterministic on-disk form
-        UserDefaults.standard.set(arr, forKey: Self.blockedArtistIdsKey)
+        UserDefaults.standard.set(blockedArtists, forKey: Self.blockedArtistsKey)
     }
 
     private func loadBlockedArtists() {
-        let arr = UserDefaults.standard.stringArray(forKey: Self.blockedArtistIdsKey) ?? []
-        blockedArtistIds = Set(arr)
+        if let dict = UserDefaults.standard.dictionary(forKey: Self.blockedArtistsKey) as? [String: String] {
+            blockedArtists = dict
+            return
+        }
+        // One-time migration from the legacy Set<String> shape. Names
+        // default to the id; the next "Don't recommend" tap on the
+        // same artist will upgrade the entry with a real name.
+        if let arr = UserDefaults.standard.stringArray(forKey: Self.legacyBlockedArtistIdsKey) {
+            blockedArtists = Dictionary(uniqueKeysWithValues: arr.map { ($0, $0) })
+            persistBlockedArtists()
+            UserDefaults.standard.removeObject(forKey: Self.legacyBlockedArtistIdsKey)
+        }
     }
 
     /// Navigate to a media item's detail page, regardless of where the
