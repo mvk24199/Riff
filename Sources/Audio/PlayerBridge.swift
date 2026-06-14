@@ -104,9 +104,16 @@ final class PlayerBridge {
         self.innerTube = innerTube
         // Restore playback prefs from prior launch.
         let storedVolume = UserDefaults.standard.object(forKey: Self.volumeKey) as? Double
-        let storedRate   = UserDefaults.standard.object(forKey: Self.rateKey)   as? Double
         self.volume = storedVolume ?? 1.0
-        self.playbackRate = storedRate ?? 1.0
+        // One-time migration: the old single `player.rate` key (set
+        // by pre-Tier-2-#9 builds) becomes the music-kind default.
+        if let legacy = UserDefaults.standard.object(forKey: Self.legacyRateKey) as? Double,
+           UserDefaults.standard.object(forKey: Self.rateKey(for: .music)) == nil {
+            UserDefaults.standard.set(legacy, forKey: Self.rateKey(for: .music))
+            UserDefaults.standard.removeObject(forKey: Self.legacyRateKey)
+        }
+        // Initial kind is .music (nothing playing yet); rate follows.
+        self.playbackRate = Self.storedRate(for: .music)
         if let raw = UserDefaults.standard.string(forKey: Self.repeatKey),
            let mode = RepeatMode(rawValue: raw) {
             self.repeatMode = mode
@@ -127,7 +134,10 @@ final class PlayerBridge {
     }
 
     private static let volumeKey = "player.volume"
-    private static let rateKey   = "player.rate"
+    /// Legacy single-rate UserDefaults key. Migrated to the new
+    /// per-kind `player.rate.music` / `player.rate.spoken` keys on
+    /// first launch; see init.
+    private static let legacyRateKey = "player.rate"
     private static let repeatKey = "player.repeat"
     private static let shuffleKey = "player.shuffle"
     private static let normalizationKey = "player.normalizationEnabled"
@@ -294,6 +304,9 @@ final class PlayerBridge {
             albumId: item.albumId,
             artistId: item.artistId
         )
+        // Switch playback kind + rate before navigation so the
+        // setPlaybackRate JS call lands as soon as the bridge is ready.
+        await applyRate(for: PlaybackKind.from(item.kind))
         // Reset & pre-fetch surrounding context (queue + lyrics/related ids).
         // Use the auto-radio playlist (RDAMVM<videoId>) so /next returns a
         // proper YT-Music-style radio queue instead of just the current
@@ -609,12 +622,24 @@ final class PlayerBridge {
         // ids (used to fetch playlist details), not playable ids.
         let cleaned = id.hasPrefix("VL") ? String(id.dropFirst(2)) : id
         Log.resolver.debug("playPlaylist id=\(id, privacy: .public) cleaned=\(cleaned, privacy: .public)")
+        // Generic playlists assumed music — YT Music doesn't surface
+        // podcast playlists as a kind we can tell apart at this seam.
+        await applyRate(for: .music)
         await navigate(watchURL(videoId: nil, playlistId: cleaned))
     }
 
-    func playAlbum(id: String)    async { await playByResolvingBrowseId(id) }
-    func playPodcast(id: String)  async { await playByResolvingBrowseId(id) }
-    func playArtistRadio(id: String) async { await playByResolvingBrowseId(id) }
+    func playAlbum(id: String)    async {
+        await applyRate(for: .music)
+        await playByResolvingBrowseId(id)
+    }
+    func playPodcast(id: String)  async {
+        await applyRate(for: .spoken)
+        await playByResolvingBrowseId(id)
+    }
+    func playArtistRadio(id: String) async {
+        await applyRate(for: .music)
+        await playByResolvingBrowseId(id)
+    }
 
     /// Hand off browseId resolution to `BrowseIdResolver` and navigate
     /// the WKWebView to the resolved destination. The resolver owns
@@ -701,12 +726,65 @@ final class PlayerBridge {
         await eval("window.musicBridge.seek(\(fraction))")
     }
 
-    /// Playback rate (0.5x – 2.0x). Useful for podcasts; works for music
-    /// too. Persists across track changes within the same WebView session.
+    /// Coarse split for per-kind default playback rates. Spoken-word
+    /// content (podcasts, episodes) defaults to 1.25× because that's
+    /// where most podcast listeners live; music defaults to 1.0×.
+    /// The user's last-set rate for each kind is persisted separately,
+    /// so flipping between a podcast (1.5×) and a song (1.0×) doesn't
+    /// reset either preference.
+    enum PlaybackKind: String, Hashable, Sendable {
+        case music, spoken
+
+        static func from(_ kind: MediaItem.Kind) -> PlaybackKind {
+            switch kind {
+            case .episode, .podcast: return .spoken
+            default: return .music
+            }
+        }
+
+        var defaultRate: Double {
+            switch self {
+            case .music:  return 1.0
+            case .spoken: return 1.25
+            }
+        }
+    }
+
+    /// The current playback kind. Updated whenever a play(item:)-style
+    /// entry point fires; autoplay-advanced tracks inherit the current
+    /// kind (autoplay never crosses the music ↔ spoken boundary in
+    /// practice — YT's radio queues are kind-homogeneous).
+    private(set) var currentKind: PlaybackKind = .music
+
+    /// Playback rate (0.5x – 2.0x). The setter writes through to the
+    /// current kind's UserDefaults entry so the next time that kind
+    /// plays, this rate is restored.
     private(set) var playbackRate: Double = 1.0
     func setPlaybackRate(_ rate: Double) async {
         playbackRate = rate
-        UserDefaults.standard.set(rate, forKey: Self.rateKey)
+        UserDefaults.standard.set(rate, forKey: Self.rateKey(for: currentKind))
+        await eval("window.musicBridge.setPlaybackRate(\(rate))")
+    }
+
+    private static func rateKey(for kind: PlaybackKind) -> String {
+        "player.rate.\(kind.rawValue)"
+    }
+
+    /// Look up the persisted rate for a kind, falling back to the
+    /// kind's default. Doesn't touch JS state — call applyRate(for:)
+    /// when you also want the page's rate to follow.
+    private static func storedRate(for kind: PlaybackKind) -> Double {
+        UserDefaults.standard.object(forKey: rateKey(for: kind)) as? Double ?? kind.defaultRate
+    }
+
+    /// Switch the current kind and push the corresponding stored rate
+    /// to both this observable property and the JS bridge. Called from
+    /// the play(item:) / playPodcast(id:) entry points whenever the
+    /// kind might change.
+    private func applyRate(for kind: PlaybackKind) async {
+        currentKind = kind
+        let rate = Self.storedRate(for: kind)
+        playbackRate = rate
         await eval("window.musicBridge.setPlaybackRate(\(rate))")
     }
 
@@ -1024,6 +1102,9 @@ final class PlayerBridge {
                     if self.volume != 1.0 {
                         await self.evalWithTimeout(js: "window.musicBridge.setVolume(\(self.volume))")
                     }
+                    // Always re-apply the current kind's rate (not just
+                    // != 1.0), so spoken-word defaults (1.25×) re-arm
+                    // on page reload too.
                     if self.playbackRate != 1.0 {
                         await self.evalWithTimeout(js: "window.musicBridge.setPlaybackRate(\(self.playbackRate))")
                     }

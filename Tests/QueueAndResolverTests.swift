@@ -162,3 +162,32 @@ final class BrowseIdResolverTests: XCTestCase {
         return URLSession(configuration: config)
     }()
 }
+
+/// Tier 2 #9: per-kind playback rate defaults. The kind-derivation is
+/// pure (no UserDefaults touched), so these stay tight unit tests.
+final class PlaybackKindTests: XCTestCase {
+    func testSongMapsToMusic() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.from(.song), .music)
+    }
+    func testAlbumMapsToMusic() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.from(.album), .music)
+    }
+    func testPlaylistMapsToMusic() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.from(.playlist), .music)
+    }
+    func testArtistMapsToMusic() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.from(.artist), .music)
+    }
+    func testEpisodeMapsToSpoken() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.from(.episode), .spoken)
+    }
+    func testPodcastMapsToSpoken() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.from(.podcast), .spoken)
+    }
+    func testMusicDefaultRate() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.music.defaultRate, 1.0)
+    }
+    func testSpokenDefaultRate() {
+        XCTAssertEqual(PlayerBridge.PlaybackKind.spoken.defaultRate, 1.25)
+    }
+}

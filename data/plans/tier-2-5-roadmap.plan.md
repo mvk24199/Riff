@@ -61,8 +61,17 @@ status: executing        # draft → approved → executing → done
             default; toggle in Settings → Playback. <video>.volume
             still drives the user-facing volume — both attenuations
             multiply.
-- [ ] **9. Per-kind playback rate defaults**
-      files: PlayerBridge.swift, NowPlayingView.swift, Tests/QueueAndResolverTests.swift
+- [x] **9. Per-kind playback rate defaults**
+      files: PlayerBridge.swift, Tests/QueueAndResolverTests.swift
+      note: PlaybackKind enum (.music / .spoken). Music defaults to 1.0×,
+            spoken (episodes + podcasts) to 1.25×. Rates persist per kind
+            so flipping between a podcast and a song doesn't reset either
+            preference. play(item:) derives kind from MediaItem.kind;
+            playPodcast() forces .spoken; play{Album,Playlist,ArtistRadio}
+            force .music. Legacy `player.rate` migrated into
+            `player.rate.music` on first launch. NowPlayingView slider
+            unchanged — it reads/writes `playbackRate` as before; the
+            kind-keyed persistence is transparent. 8 new tests.
 - [ ] **10. Share URL + Lyric image cards**
       files: PlayerBridge.swift, TrackContextMenu.swift, new Sources/UI/LyricCardSheet.swift
 - [ ] **11. Phase 3 — App Intents (Spotlight + Siri + Shortcuts)**
