@@ -129,6 +129,24 @@ final class InnerTubeClient: @unchecked Sendable {
         return sections
     }
 
+    /// Fetch the "Mixed for you" feed — personalized auto-generated
+    /// mixes (My Supermix, Discover Mix, New Release Mix, etc.).
+    /// Same shelf shape as Home / Explore, so parseHomeShelf handles
+    /// the response without extra parser work.
+    ///
+    /// Anonymous users get an empty / shelf-less response — there's
+    /// nothing personal to mix. Callers should hide the section when
+    /// the result is empty rather than rendering a titled void.
+    func browseMixedForYou() async throws -> [HomeSection] {
+        let body = try await postRaw(.browse, body: ["browseId": BrowseID.mixedForYou])
+        let shelves = Parsing.array(body, "contents",
+            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        let sections = shelves.compactMap(Self.parseHomeShelf)
+        Log.innertube.debug("mixedForYou sections=\(sections.count)")
+        return sections
+    }
+
     /// Walk a /browse response (initial or continuation-chunk) and return
     /// the next continuation token, if YT included one.
     private static func findContinuationToken(in body: [String: Any]) -> String? {

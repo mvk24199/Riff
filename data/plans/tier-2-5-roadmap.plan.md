@@ -42,9 +42,15 @@ status: executing        # draft → approved → executing → done
             so the "year in review" framing would over-promise. Pure
             stats math lives in RecapStats.compute(from:) and is covered
             by Tests/RecapStatsTests.swift (12 new tests).
-- [ ] **6. Mixed-for-you Library section**
-      files: LibraryView.swift, InnerTubeClient.swift
+- [x] **6. Mixed-for-you Library section**
+      files: LibraryView.swift, InnerTubeClient.swift, Endpoints.swift
       prework: confirm `FEmusic_mixed_for_you` browseId against live YT Music
+      note: signed-in users see personalized mix carousels (Supermix,
+            Discover Mix, …) above the section grid; anonymous responses
+            are empty and the carousels hide entirely. Fetched in parallel
+            with `library(section:)` via async let; mixed-feed failure
+            silently hides without an error banner. Reuses parseHomeShelf
+            + HomeSectionRow — no new parser path, no new test needed.
 - [x] **7. Explore tab** (largest single step)
       files: AppEnvironment.swift, RiffApp.swift, new Sources/UI/Explore/ExploreView.swift,
              InnerTubeClient.swift (new browseExplore() + browseMoodsAndGenres())
