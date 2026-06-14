@@ -17,6 +17,22 @@ struct SettingsView: View {
     @State private var clientId: String = ""
     @State private var clientSecret: String = ""
     @State private var saved = false
+
+    // MARK: - AI features state
+    /// Buffer for the Anthropic API key. We load whatever is in
+    /// Keychain on appear; the buffer is what the user is editing
+    /// before they hit Save. Never logged, never persisted outside
+    /// Keychain.
+    @State private var anthropicAPIKey: String = ""
+    @State private var anthropicModel: String = AnthropicProvider.defaultModel
+    @State private var aiSaveStatus: String? = nil
+    @State private var aiTestResult: TestResult? = nil
+    @State private var aiTestInFlight: Bool = false
+
+    enum TestResult: Equatable {
+        case success
+        case failure(String)
+    }
     /// Email of the signed-in Google account, when we can fetch it
     /// (Device-Flow path only — see UserInfoService for the rationale).
     /// Nil while loading or for cookie-based sessions.
@@ -43,6 +59,8 @@ struct SettingsView: View {
                     keyboardShortcutsSection
                     Divider().background(Theme.divider)
                     libraryAccessSection
+                    Divider().background(Theme.divider)
+                    aiFeaturesSection
                     if !env.blockedArtistIds.isEmpty {
                         Divider().background(Theme.divider)
                         blockedArtistsSection
@@ -60,6 +78,14 @@ struct SettingsView: View {
                 clientId = config.clientId
                 clientSecret = config.clientSecret
             }
+            // Load AI features state from Keychain. Show a masked
+            // placeholder if a key is already saved — never echo the
+            // raw key back into the SecureField, even though SwiftUI
+            // would render it as dots.
+            if AnthropicProvider.storedAPIKey() != nil {
+                anthropicAPIKey = "" // empty buffer; placeholder hints "already saved"
+            }
+            anthropicModel = AnthropicProvider.storedModel()
         }
         .task {
             // Best-effort fetch on open; fails silently when the user
@@ -161,6 +187,153 @@ struct SettingsView: View {
             }
             .font(.system(size: 12, weight: .semibold))
             .tint(.white)
+        }
+    }
+
+    /// "AI features" — BYO-LLM (Anthropic for now). The user
+    /// pastes their own API key + picks a model; Riff uses it to
+    /// power the Queue Builder ("vibe → queue") sheet. The key
+    /// lives in Keychain, never UserDefaults, and never appears in
+    /// logs or error messages.
+    private var aiFeaturesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("AI features")
+            Text("Bring your own Anthropic API key to unlock the Queue Builder — describe a vibe (\u{201C}rainy Sunday morning, mellow indie folk\u{201D}) and Riff turns it into a real queue. The key is stored in macOS Keychain and used directly from your Mac to api.anthropic.com — Riff never sees it.")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.65))
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Anthropic API key")
+                    .font(.system(size: 12, weight: .semibold))
+                SecureField(
+                    AnthropicProvider.storedAPIKey() == nil
+                        ? "sk-ant-…"
+                        : "•••• saved — paste a new key to replace",
+                    text: $anthropicAPIKey
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+                .onSubmit(saveAnthropicKey)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Model")
+                    .font(.system(size: 12, weight: .semibold))
+                Picker("", selection: $anthropicModel) {
+                    ForEach(AnthropicProvider.availableModels, id: \.self) { id in
+                        Text(modelDisplayName(id)).tag(id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .onChange(of: anthropicModel) { _, new in
+                    AnthropicProvider.setModel(new)
+                }
+            }
+
+            HStack {
+                Button("Save key") { saveAnthropicKey() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.red)
+                    .disabled(anthropicAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button {
+                    testAnthropicConnection()
+                } label: {
+                    if aiTestInFlight {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Test connection")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(aiTestInFlight || AnthropicProvider.storedAPIKey() == nil)
+
+                if AnthropicProvider.storedAPIKey() != nil {
+                    Button("Clear") {
+                        AnthropicProvider.clearAPIKey()
+                        anthropicAPIKey = ""
+                        aiSaveStatus = "Key removed."
+                        aiTestResult = nil
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Spacer()
+
+                Group {
+                    if case .success = aiTestResult {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            Text("Connected").font(.system(size: 12)).foregroundStyle(.green)
+                        }
+                    } else if case .failure(let msg) = aiTestResult {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+                            Text(msg).font(.system(size: 12)).foregroundStyle(.red).lineLimit(2)
+                        }
+                    } else if let status = aiSaveStatus {
+                        Text(status)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.green)
+                    }
+                }
+            }
+        }
+    }
+
+    private func modelDisplayName(_ id: String) -> String {
+        switch id {
+        case "claude-haiku-4-5-20251001": return "Claude Haiku 4.5 (fast, recommended)"
+        case "claude-sonnet-4-6":         return "Claude Sonnet 4.6 (smarter)"
+        default: return id
+        }
+    }
+
+    private func saveAnthropicKey() {
+        let trimmed = anthropicAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try AnthropicProvider.setAPIKey(trimmed)
+            anthropicAPIKey = "" // clear buffer; SecureField placeholder now reads "saved"
+            aiSaveStatus = "Saved to Keychain."
+            aiTestResult = nil
+        } catch {
+            // Don't leak the key into the error message — only the
+            // failure mode (almost always a Keychain ACL prompt the
+            // user denied).
+            aiSaveStatus = "Couldn't save to Keychain."
+        }
+    }
+
+    private func testAnthropicConnection() {
+        aiTestInFlight = true
+        aiTestResult = nil
+        aiSaveStatus = nil
+        let provider = AnthropicProvider()
+        let model = AnthropicProvider.storedModel()
+        Task {
+            do {
+                // Tiny prompt — we just want to confirm the key works.
+                // Anthropic charges by token; this round-trips in
+                // <50 input + <5 output tokens.
+                _ = try await provider.chat([.user("Reply with the single word: ok")], model: model)
+                await MainActor.run {
+                    aiTestResult = .success
+                    aiTestInFlight = false
+                }
+            } catch let err as LLMError {
+                await MainActor.run {
+                    aiTestResult = .failure(err.errorDescription ?? "Couldn't reach Anthropic.")
+                    aiTestInFlight = false
+                }
+            } catch {
+                await MainActor.run {
+                    aiTestResult = .failure("Couldn't reach Anthropic.")
+                    aiTestInFlight = false
+                }
+            }
         }
     }
 

@@ -522,6 +522,30 @@ struct NowPlayingView: View {
                     .buttonStyle(.plain)
                     .help("Save these tracks as a new playlist")
                 }
+                // "✨ Build" — opens the AI Queue Builder sheet.
+                // Discoverable but unobtrusive: same chip shape as
+                // Save / Tune, sparkles icon hints at the AI nature.
+                // Always visible (the sheet itself handles the
+                // "no API key" empty state) so users can find the
+                // feature before they've configured it.
+                Button {
+                    env.isQueueBuilderSheetPresented = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Build")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.06))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Build a queue from a vibe with AI")
+
                 Button {
                     tunePopoverOpen = true
                 } label: {
