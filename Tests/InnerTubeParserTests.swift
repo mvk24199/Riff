@@ -324,10 +324,162 @@ final class InnerTubeParserTests: XCTestCase {
             subtitle: "Artist",
             thumbnailURL: URL(string: "https://example.com/a.jpg"),
             albumId: "MPREb",
-            artistId: "UC"
+            artistId: "UC",
+            durationSeconds: 222,
+            year: 2024
         )
         let data = try JSONEncoder().encode(item)
         let decoded = try JSONDecoder().decode(MediaItem.self, from: data)
         XCTAssertEqual(item, decoded)
+    }
+
+    // MARK: - parseDurationString
+
+    func testParseDurationMMSS() {
+        XCTAssertEqual(InnerTubeClient.parseDurationString("3:42"), 222)
+        XCTAssertEqual(InnerTubeClient.parseDurationString("0:30"), 30)
+        XCTAssertEqual(InnerTubeClient.parseDurationString("10:00"), 600)
+    }
+
+    func testParseDurationHMMSS() {
+        XCTAssertEqual(InnerTubeClient.parseDurationString("1:23:45"), 5025)
+        XCTAssertEqual(InnerTubeClient.parseDurationString("2:00:00"), 7200)
+    }
+
+    func testParseDurationRejectsGarbage() {
+        XCTAssertNil(InnerTubeClient.parseDurationString(""))
+        XCTAssertNil(InnerTubeClient.parseDurationString("LIVE"))
+        XCTAssertNil(InnerTubeClient.parseDurationString("3:42:00:00"))
+        XCTAssertNil(InnerTubeClient.parseDurationString("0:00"),
+            "Zero-length not a real duration; rejecting it avoids fake matches on placeholders")
+        XCTAssertNil(InnerTubeClient.parseDurationString(":42"))
+        XCTAssertNil(InnerTubeClient.parseDurationString("3:"))
+    }
+
+    func testParseDurationTrimsWhitespace() {
+        XCTAssertEqual(InnerTubeClient.parseDurationString("  3:42  "), 222)
+    }
+
+    // MARK: - duration + year via parseListItem
+
+    /// List-row songs (search "Songs" shelf, library liked-songs)
+    /// carry duration in fixedColumns and year in flexColumns. This
+    /// fixture mimics a real row with both populated.
+    func testParseListItemExtractsDurationAndYear() {
+        let row: [String: Any] = [
+            "musicResponsiveListItemRenderer": [
+                "flexColumns": [
+                    [
+                        "musicResponsiveListItemFlexColumnRenderer": [
+                            "text": [
+                                "runs": [[
+                                    "text": "Sample Song",
+                                    "navigationEndpoint": [
+                                        "watchEndpoint": ["videoId": "v1"]
+                                    ]
+                                ]]
+                            ]
+                        ]
+                    ],
+                    [
+                        "musicResponsiveListItemFlexColumnRenderer": [
+                            "text": [
+                                "runs": [
+                                    ["text": "Some Artist"],
+                                    ["text": " • "],
+                                    ["text": "2021"]
+                                ]
+                            ]
+                        ]
+                    ]
+                ],
+                "fixedColumns": [
+                    [
+                        "musicResponsiveListItemFixedColumnRenderer": [
+                            "text": ["runs": [["text": "3:42"]]]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let item = InnerTubeClient.parseListItem(row)
+        XCTAssertEqual(item?.durationSeconds, 222)
+        XCTAssertEqual(item?.year, 2021)
+    }
+
+    /// Year run with a navigationEndpoint must NOT be parsed as a
+    /// year. Real-world case: artist named "1975" (the band) — their
+    /// artist run has a browseEndpoint, so we have to ignore it.
+    func testYearExtractorIgnoresLinkedNumericRuns() {
+        let row: [String: Any] = [
+            "musicResponsiveListItemRenderer": [
+                "flexColumns": [
+                    [
+                        "musicResponsiveListItemFlexColumnRenderer": [
+                            "text": [
+                                "runs": [[
+                                    "text": "Song",
+                                    "navigationEndpoint": [
+                                        "watchEndpoint": ["videoId": "v2"]
+                                    ]
+                                ]]
+                            ]
+                        ]
+                    ],
+                    [
+                        "musicResponsiveListItemFlexColumnRenderer": [
+                            "text": [
+                                "runs": [
+                                    [
+                                        "text": "1975",
+                                        "navigationEndpoint": [
+                                            "browseEndpoint": [
+                                                "browseId": "UC1975",
+                                                "browseEndpointContextSupportedConfigs": [
+                                                    "browseEndpointContextMusicConfig": [
+                                                        "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                                    ]
+                                                ]
+                                            ]
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let item = InnerTubeClient.parseListItem(row)
+        XCTAssertNil(item?.year, "Linked numeric runs are artist refs, not years")
+    }
+
+    // MARK: - year via parseTwoRowItem
+
+    func testParseTwoRowItemExtractsYearFromSubtitle() {
+        let tile: [String: Any] = [
+            "musicTwoRowItemRenderer": [
+                "title": ["runs": [["text": "Some Album"]]],
+                "subtitle": [
+                    "runs": [
+                        ["text": "Artist"],
+                        ["text": " • "],
+                        ["text": "2019"]
+                    ]
+                ],
+                "navigationEndpoint": [
+                    "browseEndpoint": [
+                        "browseId": "MPREb_sa",
+                        "browseEndpointContextSupportedConfigs": [
+                            "browseEndpointContextMusicConfig": [
+                                "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let item = InnerTubeClient.parseTwoRowItem(tile)
+        XCTAssertEqual(item?.year, 2019)
     }
 }

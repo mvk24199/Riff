@@ -24,4 +24,16 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     /// nil for rows reached via search / browse / radio queue —
     /// those aren't bound to a playlist context.
     var setVideoId: String? = nil
+    /// Track length in seconds, parsed from YT Music's `lengthText`
+    /// runs ("3:42" → 222). Drives Search-filter "show only tracks
+    /// under N minutes" and Year-end Recap's total-listening-time
+    /// stat. nil for non-songs and for rows whose source shelf
+    /// omitted the length string (some grid-shaped result sets do).
+    var durationSeconds: Int? = nil
+    /// Release year for albums / songs / podcast episodes when YT
+    /// included it in the row's subtitle runs ("2024" → 2024).
+    /// Drives Search-filter "released after year Y" + Recap's
+    /// "you played 47 tracks from 2019 this year" stat.
+    /// nil for tiles without a year run (artist tiles, most playlists).
+    var year: Int? = nil
 }

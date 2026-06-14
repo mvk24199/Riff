@@ -987,9 +987,58 @@ final class InnerTubeClient: @unchecked Sendable {
         // from its parent playlist later (the same videoId can
         // appear multiple times so videoId alone is ambiguous).
         let setVideoId = Parsing.dig(r, ["playlistItemData", "playlistSetVideoId"]) as? String
+        // Duration string — search song rows expose it as plain text
+        // at fixedColumns[0].musicResponsiveListItemFixedColumnRenderer
+        // .text.runs[0].text (typically "3:42"). Library liked-songs
+        // use the same fixed-column path. Some shelves omit it.
+        let durationText =
+            Parsing.runs(Parsing.dig(r, ["fixedColumns", "0"]) as? [String: Any],
+                         "musicResponsiveListItemFixedColumnRenderer", "text")
+        let durationSeconds = durationText.flatMap(parseDurationString)
+        // Year — scan flexColumns[1+] runs for a plain "YYYY" text run.
+        // YT puts year in the byline alongside the artist + plays count.
+        let year = extractYearFromFlexColumns(cols: cols)
         return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle,
                          thumbnailURL: thumb, albumId: albumId, artistId: artistId,
-                         setVideoId: setVideoId)
+                         setVideoId: setVideoId,
+                         durationSeconds: durationSeconds, year: year)
+    }
+
+    /// Parse "mm:ss" or "h:mm:ss" into seconds. Returns nil for any
+    /// non-conforming string so stray punctuation can't fake a
+    /// duration. Permissive about leading zeros and surrounding
+    /// whitespace; strict that the result must be greater than zero.
+    static func parseDurationString(_ s: String) -> Int? {
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        let parts = trimmed.split(separator: ":").map(String.init)
+        guard parts.count == 2 || parts.count == 3 else { return nil }
+        let ints = parts.compactMap(Int.init)
+        guard ints.count == parts.count else { return nil }
+        let seconds: Int
+        switch ints.count {
+        case 2: seconds = ints[0] * 60 + ints[1]
+        case 3: seconds = ints[0] * 3600 + ints[1] * 60 + ints[2]
+        default: return nil
+        }
+        return seconds > 0 ? seconds : nil
+    }
+
+    /// Walk every run in every flex column past the title and return
+    /// the first plain-text run that parses as a 4-digit year in the
+    /// 1900-2099 window. Skip runs with a navigationEndpoint — those
+    /// are artist / album links, never year markers.
+    private static func extractYearFromFlexColumns(cols: [[String: Any]]) -> Int? {
+        for col in cols.dropFirst() {
+            let runs = (Parsing.dig(col, ["musicResponsiveListItemFlexColumnRenderer", "text", "runs"]) as? [[String: Any]]) ?? []
+            for run in runs where run["navigationEndpoint"] == nil {
+                guard let txt = run["text"] as? String else { continue }
+                let trimmed = txt.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let y = Int(trimmed), (1900...2099).contains(y) {
+                    return y
+                }
+            }
+        }
+        return nil
     }
 
     /// Variant of `extractAlbumArtistIds` for `playlistPanelVideoRenderer`
@@ -1083,8 +1132,27 @@ final class InnerTubeClient: @unchecked Sendable {
         // different keys. Without this, "Go to album / Go to artist"
         // never shows up on Home tiles.
         let (albumId, artistId) = extractIdsFromTwoRowTile(r)
+        // Year — first plain-text 4-digit run in subtitle. Tiles
+        // for albums often surface the year alongside the artist
+        // ("Artist · 2024"); song tiles sometimes do too.
+        let year = extractYearFromRuns(Parsing.dig(r, ["subtitle", "runs"]) as? [[String: Any]] ?? [])
         return MediaItem(id: id, kind: kind, title: title, subtitle: subtitle,
-                         thumbnailURL: thumb, albumId: albumId, artistId: artistId)
+                         thumbnailURL: thumb, albumId: albumId, artistId: artistId,
+                         year: year)
+    }
+
+    /// Shared year-from-runs extractor (used by both list and tile
+    /// paths). Skips runs with a navigationEndpoint so artist /
+    /// album links can't accidentally parse as a year.
+    private static func extractYearFromRuns(_ runs: [[String: Any]]) -> Int? {
+        for run in runs where run["navigationEndpoint"] == nil {
+            guard let txt = run["text"] as? String else { continue }
+            let trimmed = txt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let y = Int(trimmed), (1900...2099).contains(y) {
+                return y
+            }
+        }
+        return nil
     }
 
     /// Walks a `musicTwoRowItemRenderer`'s subtitle runs and overflow
