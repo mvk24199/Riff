@@ -4,6 +4,8 @@ struct SearchView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var query: String = ""
     @State private var filter: SearchFilter = .all
+    @State private var yearFilter: YearFilter = .any
+    @State private var durationFilter: DurationFilter = .any
     @State private var results: [MediaItem] = []
     @State private var searching: Bool = false
     @State private var errorMessage: String?
@@ -26,6 +28,72 @@ struct SearchView: View {
             case .podcasts:  return "EgWKAQJQAWoQEAMQBBAJEA4QChAFEBEQEBAV"
             }
         }
+    }
+
+    /// Year buckets — coarse decadal slices that map to InnerTube's
+    /// `year` field on `MediaItem`. InnerTube doesn't expose a
+    /// `params` token for year filtering on `/search`, so this is a
+    /// client-side post-filter applied to the result set.
+    ///
+    /// Items without a parsed year are dropped under any non-`.any`
+    /// filter — better to under-show than to surface unrelated items
+    /// the user might think the filter excluded.
+    enum YearFilter: String, CaseIterable, Identifiable {
+        case any    = "Any year"
+        case y2020s = "2020s"
+        case y2010s = "2010s"
+        case y2000s = "2000s"
+        case older  = "Pre-2000"
+        var id: String { rawValue }
+
+        func matches(_ year: Int?) -> Bool {
+            switch self {
+            case .any:    return true
+            case .y2020s: return (year ?? -1) >= 2020
+            case .y2010s: return (year ?? -1) >= 2010 && (year ?? Int.max) < 2020
+            case .y2000s: return (year ?? -1) >= 2000 && (year ?? Int.max) < 2010
+            case .older:  return (year ?? 0) > 0 && (year ?? Int.max) < 2000
+            }
+        }
+    }
+
+    /// Length buckets for songs / episodes. Same client-side
+    /// post-filter rationale as `YearFilter`. Only applied to
+    /// kinds that carry duration — albums/playlists/artists pass
+    /// through regardless so we don't accidentally exclude them.
+    enum DurationFilter: String, CaseIterable, Identifiable {
+        case any    = "Any length"
+        case short  = "Short (< 3 min)"
+        case medium = "3–7 min"
+        case long   = "Long (7+ min)"
+        var id: String { rawValue }
+
+        func matches(_ kind: MediaItem.Kind, _ seconds: Int?) -> Bool {
+            if self == .any { return true }
+            // Don't apply to types that aren't audio tracks.
+            guard kind == .song || kind == .episode else { return true }
+            guard let s = seconds else { return false }
+            switch self {
+            case .any:    return true
+            case .short:  return s < 180
+            case .medium: return s >= 180 && s < 420
+            case .long:   return s >= 420
+            }
+        }
+    }
+
+    /// Apply the year + duration filters on top of the network
+    /// results. Network response is cached in `results`; this gets
+    /// re-evaluated on every filter change without a refetch.
+    private var displayedResults: [MediaItem] {
+        results.filter { item in
+            yearFilter.matches(item.year) && durationFilter.matches(item.kind, item.durationSeconds)
+        }
+    }
+
+    /// True when at least one refinement is active.
+    private var isFiltering: Bool {
+        yearFilter != .any || durationFilter != .any
     }
 
     var body: some View {
@@ -57,6 +125,52 @@ struct SearchView: View {
                 .padding(.vertical, 4)
             }
 
+            // Refinement row — year + duration buckets. Only visible
+            // when results exist, so the search input doesn't look
+            // overwhelmed when the user hasn't typed yet. Both filter
+            // groups scroll horizontally as a single row; a thin
+            // section divider separates them visually.
+            if !results.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(YearFilter.allCases) { y in
+                            RefinementChip(
+                                label: y.rawValue,
+                                selected: yearFilter == y,
+                                action: { yearFilter = y }
+                            )
+                        }
+                        Divider()
+                            .frame(height: 16)
+                            .padding(.horizontal, 4)
+                        ForEach(DurationFilter.allCases) { d in
+                            RefinementChip(
+                                label: d.rawValue,
+                                selected: durationFilter == d,
+                                action: { durationFilter = d }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 2)
+                }
+                if isFiltering {
+                    HStack(spacing: 6) {
+                        Text("\(displayedResults.count) of \(results.count) matches")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.55))
+                        Button("Clear") {
+                            yearFilter = .any
+                            durationFilter = .any
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.red)
+                    }
+                    .padding(.horizontal, 24)
+                }
+            }
+
             ScrollView {
                 if let errorMessage {
                     ErrorBanner(message: errorMessage) {
@@ -77,6 +191,23 @@ struct SearchView: View {
                 } else if results.isEmpty, !query.isEmpty {
                     EmptySearchState(query: query)
                         .padding(.top, 80)
+                } else if !results.isEmpty && displayedResults.isEmpty {
+                    // Refinement narrowed to zero. Distinct from a
+                    // genuine "no results for query" — the network
+                    // came back fine; the local filter is the gate.
+                    VStack(spacing: 8) {
+                        Text("No results match these filters.")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                        Button("Clear refinements") {
+                            yearFilter = .any
+                            durationFilter = .any
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 80)
                 } else if !results.isEmpty {
                     resultList
                         .padding(.horizontal, 24)
@@ -100,14 +231,14 @@ struct SearchView: View {
     /// scan by category, the way YT Music does.
     @ViewBuilder
     private var resultList: some View {
-        if let top = results.first {
+        if let top = displayedResults.first {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Top result")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.top, 8)
                 TopResultCard(item: top)
-                if results.count > 1 {
+                if displayedResults.count > 1 {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
                         ForEach(groupedRest(), id: \.title) { group in
                             if !group.title.isEmpty {
@@ -129,11 +260,11 @@ struct SearchView: View {
         }
     }
 
-    /// Buckets results 1+ (everything after the top result) by kind.
-    /// Under specific-kind filters we collapse to a single nameless
-    /// group so we don't show a redundant header.
+    /// Buckets `displayedResults[1...]` (everything after the top
+    /// result) by kind. Under specific-kind filters we collapse to a
+    /// single nameless group so we don't show a redundant header.
     private func groupedRest() -> [(title: String, items: [MediaItem])] {
-        let rest = Array(results.dropFirst())
+        let rest = Array(displayedResults.dropFirst())
         guard filter == .all else {
             return [(title: "", items: rest)]
         }
@@ -203,6 +334,28 @@ struct SearchView: View {
                     .padding(.vertical, 7)
                     .background(selected ? Color.white : Color.white.opacity(0.08))
                     .foregroundStyle(selected ? .black : .white)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Secondary refinement pill — smaller and tinted so the primary
+    /// kind row stays visually dominant. Selected state uses the
+    /// brand red so the user can tell at a glance which refinements
+    /// are active.
+    private struct RefinementChip: View {
+        let label: String
+        let selected: Bool
+        let action: () -> Void
+        var body: some View {
+            Button(action: action) {
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(selected ? Theme.red.opacity(0.85) : Color.white.opacity(0.06))
+                    .foregroundStyle(selected ? .white : .white.opacity(0.75))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)

@@ -34,7 +34,7 @@ status: executing        # draft → approved → executing → done
              HomeView.swift, SearchView.swift, SettingsView.swift
 - [ ] **3. MediaItem.duration + year (data-model precursor)**
       files: Models/MediaItem.swift, InnerTubeClient.swift, InnerTubeParserTests.swift
-- [ ] **4. Search filters: year + duration** (depends on #3)
+- [x] **4. Search filters: year + duration** (depends on #3)
       files: SearchView.swift, SearchResultRow.swift
 - [ ] **5. Year-end Recap** (depends on #3 for richness)
       files: new Sources/UI/Recap/RecapView.swift, AppEnvironment.swift, RiffApp.swift
