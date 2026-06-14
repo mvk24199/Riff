@@ -73,33 +73,63 @@
 
     window.musicBridge = api;
 
-    // Capture-phase autoplay override. The DOM event model runs capture
-    // listeners (top → target) BEFORE target-phase listeners. YT Music
-    // attached its target-phase ended listener when its app initialized;
-    // installing ours here in capture phase on `window` guarantees we
-    // run first. If a user-queued URL is pending we consume it, stop
-    // propagation so YT's listener never fires, and navigate ourselves.
+    // Autoplay override — TWO mechanisms because YT Music doesn't
+    // fire the standard <video>.ended event. They advance tracks via
+    // MSE source-swap (Media Source Extensions), which means our
+    // capture-phase ended listener never gets to run.
     //
-    // Done at documentStart (this IIFE runs before YT's app boot) so
-    // the listener is in place before any <video> exists. Listening on
-    // `window` because the actual <video> element is created later by
-    // YT's app code; capture phase walks from window → document → ...
-    // → video, so we catch ended at the topmost capture point.
+    // (a) Capture-phase ended listener — kept as a fallback for the
+    //     rare case where ended actually does fire (some streaming
+    //     transitions, some podcast contexts).
+    // (b) timeupdate-based end-of-stream detection — the real workhorse.
+    //     timeupdate fires ~4×/sec during playback. When currentTime
+    //     approaches duration we fire the pending navigation ourselves,
+    //     beating YT's MSE source-swap to the punch.
     window.addEventListener("ended", (e) => {
         const t = e.target;
         if (!t || (t.tagName !== "VIDEO" && t.tagName !== "AUDIO")) return;
-        const pending = window.__riffPendingNextUrl;
-        if (!pending) return;
-        // Stop YT Music's target-phase ended handler from running so
-        // it can't trigger its own autoplay before we navigate.
+        if (!window.__riffPendingNextUrl) return;
         e.stopImmediatePropagation();
+        const url = window.__riffPendingNextUrl;
         window.__riffPendingNextUrl = null;
-        // Pause to make sure the page doesn't keep playing the just-
-        // ended media into the navigation window. location.href will
-        // unload the page anyway, but the pause is belt-and-braces.
         try { t.pause(); } catch (_) {}
-        postEvent({ event: "riffNavigatedTo", url: pending });
-        location.href = pending;
+        postEvent({ event: "riffNavigatedTo", url: url, via: "ended" });
+        location.href = url;
+    }, true /* capture */);
+
+    // (b) timeupdate-based intercept. Triggers when currentTime is
+    // within `EOT_WINDOW` seconds of duration AND a pending URL is
+    // set. Idempotent — once we navigate, the page unloads. A guard
+    // flag prevents double-fires from rapid timeupdate events in
+    // that small window.
+    //
+    // EOT_WINDOW = 0.6s: small enough that we don't pre-empt the
+    // last bit of a song the user wants to hear; large enough that
+    // even at 4Hz timeupdate cadence we catch it before YT advances.
+    const EOT_WINDOW = 0.6;
+    let __riffEotFired = false;
+    window.addEventListener("timeupdate", (e) => {
+        const t = e.target;
+        if (!t || (t.tagName !== "VIDEO" && t.tagName !== "AUDIO")) return;
+        const pending = window.__riffPendingNextUrl;
+        if (!pending) {
+            // Reset the fire flag whenever there's nothing pending —
+            // so the next time a URL is parked, we can fire again.
+            __riffEotFired = false;
+            return;
+        }
+        if (__riffEotFired) return;
+        const dur = t.duration;
+        const cur = t.currentTime;
+        if (!isFinite(dur) || dur <= 0) return;
+        if (cur < dur - EOT_WINDOW) return;
+        // End-of-stream window reached and a URL is parked. Fire.
+        __riffEotFired = true;
+        const url = pending;
+        window.__riffPendingNextUrl = null;
+        try { t.pause(); } catch (_) {}
+        postEvent({ event: "riffNavigatedTo", url: url, via: "timeupdate" });
+        location.href = url;
     }, true /* capture */);
 
     // Wire MediaSession + video element events back to Swift.
