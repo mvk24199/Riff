@@ -89,6 +89,16 @@ struct DetailView: View {
                 annotatedSubtitle(page)
                     .font(.system(size: 13))
                     .lineLimit(3)
+                // Metadata line: "9 songs · 32 min · 2024" (or whichever
+                // pieces are available). Built from the tracks we
+                // already parsed — no extra round-trip. Empty string
+                // when nothing's known (renders as a zero-height
+                // EmptyView via the conditional).
+                if let meta = metadataLine(for: page) {
+                    Text(meta)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
                 Spacer(minLength: 8)
                 HStack(spacing: 10) {
                     Button {
@@ -265,23 +275,34 @@ struct DetailView: View {
             : page.subtitleRuns
         // Drop empty runs that would render as zero-width gaps.
         let visible = runs.filter { !$0.text.isEmpty }
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-            ForEach(Array(visible.enumerated()), id: \.offset) { _, run in
-                if let id = run.browseId, let kind = run.kind, kind == .artist || kind == .album {
-                    Button {
-                        env.navigateToBrowseId(id, kind: kind)
-                    } label: {
+
+        if visible.isEmpty {
+            // OST and various-artists albums often come back with an
+            // empty subtitle — YT has no single "album artist" to
+            // surface. Leaving the header blank reads as broken;
+            // fall back to the kind label so the user gets at least
+            // "Album" / "Playlist" / etc.
+            Text(kindLabel)
+                .foregroundStyle(.white.opacity(0.7))
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                ForEach(Array(visible.enumerated()), id: \.offset) { _, run in
+                    if let id = run.browseId, let kind = run.kind, kind == .artist || kind == .album {
+                        Button {
+                            env.navigateToBrowseId(id, kind: kind)
+                        } label: {
+                            Text(run.text)
+                                .foregroundStyle(.white)
+                                .underline(true, color: .white.opacity(0.5))
+                        }
+                        .buttonStyle(.plain)
+                    } else {
                         Text(run.text)
-                            .foregroundStyle(.white)
-                            .underline(true, color: .white.opacity(0.5))
+                            .foregroundStyle(.white.opacity(0.7))
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    Text(run.text)
-                        .foregroundStyle(.white.opacity(0.7))
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -296,6 +317,42 @@ struct DetailView: View {
                     .padding(.horizontal, 32)
             }
         }
+    }
+
+    /// "9 songs · 32 min · 2024" header metadata. Returns nil when
+    /// the tracks list is empty AND no year is known — at that point
+    /// there's nothing useful to show, and a stub line would just
+    /// add noise. Year is sourced from any track that has one (album
+    /// detail responses sometimes put it on the rows even when the
+    /// header subtitle omits it).
+    private func metadataLine(for page: InnerTubeClient.DetailPage) -> String? {
+        var pieces: [String] = []
+        if !page.tracks.isEmpty {
+            // "song" vs "songs" — small touch, but reads less robotic.
+            pieces.append(page.tracks.count == 1 ? "1 song" : "\(page.tracks.count) songs")
+            let totalSeconds = page.tracks.compactMap(\.durationSeconds).reduce(0, +)
+            if totalSeconds > 0 {
+                pieces.append(formatTotalRuntime(totalSeconds))
+            }
+        }
+        // Year: first non-nil from the tracks. The album's header may
+        // not have surfaced it but per-track rows often do.
+        if let y = page.tracks.compactMap(\.year).first {
+            pieces.append(String(y))
+        }
+        return pieces.isEmpty ? nil : pieces.joined(separator: " • ")
+    }
+
+    /// Compact "32 min" / "1 hr 18 min" for the metadata line. Drops
+    /// seconds — total album runtimes in seconds add noise.
+    private func formatTotalRuntime(_ totalSeconds: Int) -> String {
+        let totalMinutes = totalSeconds / 60
+        if totalMinutes < 60 {
+            return "\(totalMinutes) min"
+        }
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        return m == 0 ? "\(h) hr" : "\(h) hr \(m) min"
     }
 
     /// Per-row duration formatter — matches the search-result-row
