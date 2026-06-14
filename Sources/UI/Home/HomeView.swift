@@ -39,7 +39,15 @@ struct HomeView: View {
         loading = true
         defer { loading = false }
         do {
-            sections = try await env.innerTube.browseHome()
+            let raw = try await env.innerTube.browseHome()
+            // Filter blocked artists out of every carousel. We drop
+            // empty sections too so a section that only contained
+            // blocked artists doesn't render as a titled void.
+            sections = raw.compactMap { sec in
+                let kept = sec.items.filter { !env.isBlocked($0) }
+                guard !kept.isEmpty else { return nil }
+                return HomeSection(id: sec.id, title: sec.title, items: kept)
+            }
             errorMessage = nil
         } catch {
             errorMessage = LoadErrorPresenter.message(for: error, env: env)

@@ -53,6 +53,13 @@ struct TrackContextMenu: View {
                 Button("Go to artist") {
                     env.navigateToBrowseId(artistId, kind: .artist)
                 }
+                // "Don't recommend this artist" — hides every future
+                // surfacing of the artist (Home carousels, Search
+                // results, /next radio, /related). Removable from
+                // Settings → Library → Blocked Artists.
+                Button("Don't recommend this artist") {
+                    env.blockArtist(id: artistId)
+                }
             }
         }
         if env.isSignedIn {

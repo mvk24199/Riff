@@ -219,7 +219,8 @@ struct SearchView: View {
         searching = true
         defer { searching = false }
         do {
-            results = try await env.innerTube.search(query: query, filter: filter)
+            let raw = try await env.innerTube.search(query: query, filter: filter)
+            results = raw.filter { !env.isBlocked($0) }
             errorMessage = nil
         } catch {
             results = []

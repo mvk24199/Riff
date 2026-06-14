@@ -66,6 +66,14 @@ final class PlayerBridge {
     @ObservationIgnored
     var onUpdate: (() -> Void)?
 
+    /// Closure that returns true when a given (artistId, item) should
+    /// be filtered out of recommendations. Set by AppEnvironment
+    /// (which owns the block-list) post-init. Defaults to "block
+    /// nothing" so unit tests don't need to wire it. Called from the
+    /// queue assignment + related-songs assignment paths.
+    @ObservationIgnored
+    var shouldBlock: (MediaItem) -> Bool = { _ in false }
+
     @ObservationIgnored
     private let innerTube: InnerTubeClient
 
@@ -380,7 +388,16 @@ final class PlayerBridge {
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
-                self.queue.replaceQueue(fetched)
+                // Drop blocked-artist tracks before they reach the
+                // UI. The currentTrack itself is never filtered —
+                // the user is already listening to it; pulling it
+                // out of upNext just causes the "what's playing"
+                // strip to misalign.
+                let curId = self.currentTrack?.videoId
+                let visible = fetched.filter { item in
+                    item.id == curId || !self.shouldBlock(item)
+                }
+                self.queue.replaceQueue(visible)
                 // Backfill the current track's album/artist IDs if /next
                 // returned them and the track we have on screen is missing
                 // them — common when the user clicks a carousel tile whose
@@ -435,7 +452,11 @@ final class PlayerBridge {
             Log.bridge.debug("applyChip \(chip.id, privacy: .public) → queue=\(response.queue.count)")
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
-                self.queue.replaceQueue(response.queue)
+                let curId = self.currentTrack?.videoId
+                let visible = response.queue.filter { item in
+                    item.id == curId || !self.shouldBlock(item)
+                }
+                self.queue.replaceQueue(visible)
                 // Refresh chip set: YT returns the same cloud back, but
                 // with a different chip's `isSelected=true`.
                 if !response.chips.isEmpty {
@@ -490,7 +511,10 @@ final class PlayerBridge {
         guard related.isEmpty, let id = relatedBrowseId else { return }
         Task { [innerTube, weak self] in
             let items = (try? await innerTube.related(browseId: id)) ?? []
-            await MainActor.run { self?.related = items }
+            await MainActor.run {
+                guard let self else { return }
+                self.related = items.filter { !self.shouldBlock($0) }
+            }
         }
     }
 

@@ -43,6 +43,10 @@ struct SettingsView: View {
                     keyboardShortcutsSection
                     Divider().background(Theme.divider)
                     libraryAccessSection
+                    if !env.blockedArtistIds.isEmpty {
+                        Divider().background(Theme.divider)
+                        blockedArtistsSection
+                    }
                     Divider().background(Theme.divider)
                     aboutSection
                 }
@@ -157,6 +161,38 @@ struct SettingsView: View {
             }
             .font(.system(size: 12, weight: .semibold))
             .tint(.white)
+        }
+    }
+
+    /// "Blocked artists" — manage the list the user built via the
+    /// "Don't recommend this artist" context-menu action. Only shown
+    /// when the list is non-empty; nothing to manage otherwise.
+    private var blockedArtistsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("Blocked artists")
+            Text("Tracks by these artists are hidden from Home, Search, and the radio queue. Note: when a track ends naturally, YouTube Music's autoplay can still pick a blocked artist — we filter what we show, not what YT plays.")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.65))
+                .fixedSize(horizontal: false, vertical: true)
+            // Sorted by id for deterministic display; we don't fetch
+            // human-readable artist names (would require an extra
+            // /browse round-trip per id at Settings-open time). Worth
+            // upgrading later — for now the id is the affordance.
+            ForEach(Array(env.blockedArtistIds).sorted(), id: \.self) { id in
+                HStack {
+                    Text(id)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Unblock") {
+                        env.unblockArtist(id: id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.vertical, 2)
+            }
         }
     }
 

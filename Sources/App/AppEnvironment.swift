@@ -67,6 +67,55 @@ final class AppEnvironment {
     /// CommandGroup can drive it via ⌘1 / ⌘2 / ⌘3 keyboard shortcuts.
     var activeTab: AppTab = .home
 
+    /// Set of artist browseIds the user has chosen never to see again.
+    /// Mirrors YT Music's "Don't recommend this artist" affordance —
+    /// items whose `artistId` is in this set are filtered out of
+    /// surfaces that show recommendations (Home carousels, Search
+    /// results, /next radio queues, /related songs).
+    ///
+    /// Stored under `library.blockedArtistIds` in UserDefaults so it
+    /// survives sign-out + relaunch. Server-side propagation isn't
+    /// possible without a YT API for "block artist" (none documented),
+    /// so this is client-side only — same caveat as `removeFromQueue`:
+    /// the WebView's autoplay can still pick a blocked artist when
+    /// the current track ends. We don't pretend otherwise; the
+    /// settings panel explains the limit.
+    private(set) var blockedArtistIds: Set<String> = []
+    private static let blockedArtistIdsKey = "library.blockedArtistIds"
+
+    func isBlocked(artistId: String?) -> Bool {
+        guard let id = artistId, !id.isEmpty else { return false }
+        return blockedArtistIds.contains(id)
+    }
+
+    func isBlocked(_ item: MediaItem) -> Bool {
+        // Block by artist match OR when the item itself IS the blocked
+        // artist (e.g. an Artist tile in a search-result list).
+        if item.kind == .artist && blockedArtistIds.contains(item.id) { return true }
+        return isBlocked(artistId: item.artistId)
+    }
+
+    func blockArtist(id: String) {
+        guard !id.isEmpty else { return }
+        blockedArtistIds.insert(id)
+        persistBlockedArtists()
+    }
+
+    func unblockArtist(id: String) {
+        blockedArtistIds.remove(id)
+        persistBlockedArtists()
+    }
+
+    private func persistBlockedArtists() {
+        let arr = Array(blockedArtistIds).sorted()  // sorted for deterministic on-disk form
+        UserDefaults.standard.set(arr, forKey: Self.blockedArtistIdsKey)
+    }
+
+    private func loadBlockedArtists() {
+        let arr = UserDefaults.standard.stringArray(forKey: Self.blockedArtistIdsKey) ?? []
+        blockedArtistIds = Set(arr)
+    }
+
     /// Navigate to a media item's detail page, regardless of where the
     /// caller is. Closes the full-screen Now Playing overlay (so the
     /// destination is actually visible) and pushes the item onto the
@@ -125,6 +174,7 @@ final class AppEnvironment {
         self.player = PlayerBridge(innerTube: innerTube)
         self.nowPlaying = NowPlayingCenter(player: player)
         self.refreshSignedInState()
+        self.loadBlockedArtists()
         // Subscribe to MetricKit on launch — Apple's built-in crash /
         // hang / perf reporter. Payloads land daily under
         // ~/Library/Application Support/Riff/diagnostics/. No network
@@ -154,6 +204,13 @@ final class AppEnvironment {
                 duration: self.player.duration,
                 elapsed: self.player.elapsed
             )
+        }
+        // Hand PlayerBridge the predicate it uses to filter blocked
+        // artists out of upNext / related. Closure captures self
+        // weakly; if env is gone the filter falls back to "block
+        // nothing" via the default initializer.
+        self.player.shouldBlock = { [weak self] item in
+            self?.isBlocked(item) ?? false
         }
     }
 }
