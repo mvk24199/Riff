@@ -50,6 +50,10 @@ final class AppEnvironment {
     /// Drives the "New playlist" name-prompt sheet.
     var isNewPlaylistSheetPresented: Bool = false
 
+    /// Drives the "Your Riff Highlights" recap sheet. Raised from the
+    /// Help menu entry; consumed by a `.sheet` on RootView.
+    var isRecapSheetPresented: Bool = false
+
     /// Which source seeds the next-presented New Playlist sheet.
     /// Default is the historical behavior (add current track); the
     /// "Save queue" button on the Up Next pane flips this to `.queue`

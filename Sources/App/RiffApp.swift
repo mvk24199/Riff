@@ -40,6 +40,8 @@ struct RiffApp: App {
                 TransportMenuItems()
             }
             CommandGroup(replacing: .help) {
+                RecapMenuItem()
+                Divider()
                 Button("Riff on GitHub") {
                     if let url = URL(string: "https://github.com/mvk24199/Riff") {
                         NSWorkspace.shared.open(url)
@@ -68,6 +70,20 @@ struct RiffApp: App {
         .defaultSize(width: 360, height: 70)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+    }
+}
+
+/// Help menu entry that surfaces the "Your Riff Highlights" sheet. Lives
+/// in its own struct so it can read `@FocusedValue(\.appEnvironment)`,
+/// which the CommandGroup builder otherwise can't reach.
+private struct RecapMenuItem: View {
+    @FocusedValue(\.appEnvironment) private var env
+
+    var body: some View {
+        Button("Your Riff Highlights") {
+            env?.isRecapSheetPresented = true
+        }
+        .disabled(env == nil)
     }
 }
 
@@ -235,6 +251,9 @@ struct RootView: View {
         }
         .sheet(isPresented: $env.isNewPlaylistSheetPresented) {
             NewPlaylistSheet()
+        }
+        .sheet(isPresented: $env.isRecapSheetPresented) {
+            RecapView()
         }
     }
 }
