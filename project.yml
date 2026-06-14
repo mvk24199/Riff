@@ -39,6 +39,11 @@ targets:
         CFBundleVersion: "1"
         LSApplicationCategoryType: public.app-category.music
         NSHumanReadableCopyright: "© 2026. AGPL-3.0."
+        # AppIntents usage description — surfaced if Siri invokes a
+        # Riff intent on macOS. Spotlight + Shortcuts invocations do
+        # not require this key, but including it keeps the
+        # voice-invocation path consent-clean.
+        NSSiriUsageDescription: "Riff uses Siri to play music, skip tracks, and start artist radio stations."
     entitlements:
       path: Sources/Riff.entitlements
       properties:

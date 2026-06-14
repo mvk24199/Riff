@@ -13,6 +13,17 @@ enum AppTab: Hashable {
 @MainActor
 @Observable
 final class AppEnvironment {
+    /// Process-wide weak reference to the currently-live AppEnvironment.
+    /// **Intents-only.** The SwiftUI environment-injected instance is the
+    /// canonical one; AppIntents has no access to SwiftUI's environment, so
+    /// `AppEnvironment.init` populates this so `RiffIntents` can reach the
+    /// live PlayerBridge / InnerTubeClient without spinning up a duplicate
+    /// WKWebView. Do not consume this from view code.
+    ///
+    /// MainActor-isolated like the rest of the class; intent `perform()`
+    /// bodies are `@MainActor`, so they read this safely.
+    static weak var current: AppEnvironment?
+
     let innerTube: InnerTubeClient
     let player: PlayerBridge
     let nowPlaying: NowPlayingCenter
@@ -214,6 +225,10 @@ final class AppEnvironment {
         self.nowPlaying = NowPlayingCenter(player: player)
         self.refreshSignedInState()
         self.loadBlockedArtists()
+        // Publish ourselves as the process-wide handle for AppIntents.
+        // RiffApp creates exactly one AppEnvironment; if that ever
+        // changes, the weak ref naturally tracks the latest instance.
+        Self.current = self
         // Subscribe to MetricKit on launch — Apple's built-in crash /
         // hang / perf reporter. Payloads land daily under
         // ~/Library/Application Support/Riff/diagnostics/. No network
