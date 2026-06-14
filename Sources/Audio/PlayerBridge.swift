@@ -1140,9 +1140,42 @@ final class PlayerBridge {
                 // the rate-limited progress snapshot) so a quick
                 // skip-then-quit still captures the latest track.
                 snapshotSession()
+                // Reconciliation: if a user-queued item was expected
+                // to play next but YT autoplayed something else, the
+                // JS-side onStateChange interception missed the
+                // window — override. Defense in depth against the
+                // race we've been chasing across BUG-2 rounds 1-4.
+                // See kaset's PlayerService+WebQueueSync for the
+                // pattern this implements.
+                reconcileWithUserQueueIfNeeded(observedVideoId: id)
             }
         }
         onUpdate?()
+    }
+
+    /// If the user explicitly Play-next'd a track and YT autoplayed
+    /// something different instead, override by playing the expected
+    /// track. Defense in depth against the BUG-2 race when the
+    /// JS-side onStateChange interception missed its window.
+    ///
+    /// Naming: `userQueuedIds` already represents user intent
+    /// (everything inserted via playNext / addToQueueEnd / playTracks).
+    /// We walk `upNext` in order and pick the first id still in the
+    /// set as the expected next track.
+    ///
+    /// Loop safety: we remove the expected id from `userQueuedIds`
+    /// immediately on override-attempt — so even if the override's
+    /// navigation never lands (network failure, ad pre-roll
+    /// confusion) we don't keep retrying. The user can re-queue
+    /// manually if needed.
+    private func reconcileWithUserQueueIfNeeded(observedVideoId id: String) {
+        let expected = upNext.first { userQueuedIds.contains($0.id) }
+        guard let expected, expected.id != id else { return }
+        Log.bridge.debug("Reconciliation: YT autoplayed \(id, privacy: .public) but expected user-queued \(expected.id, privacy: .public); overriding")
+        userQueuedIds.remove(expected.id)  // burn the credit
+        Task { [weak self] in
+            await self?.play(item: expected)
+        }
     }
 }
 
