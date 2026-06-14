@@ -1056,6 +1056,22 @@ final class PlayerBridge {
             // writing UserDefaults every 500 ms.
             snapshotSessionIfDue()
         case .trackChanged(let id, let playlistId, let title, let artist, let art):
+            // Remember whether the just-arrived track was a user-queued
+            // item BEFORE we remove it from the set — reconciliation
+            // (below) needs this to avoid the album-skip bug:
+            //
+            //   playTracks(album) seeds userQueuedIds = {B, C, D, …}
+            //   Track A plays → ends → JS navigates to B via
+            //   __riffPendingNextUrl → trackChanged(B) arrives. If we
+            //   reconcile here we'd see expected=C ≠ B and override
+            //   to C, never letting B actually play. Then C
+            //   immediately overrides to D, etc. — looks like a
+            //   freeze because every track gets force-skipped after
+            //   a frame.
+            //
+            // Rule: when the observed track WAS a user-queued item,
+            // this IS what we expected to play. Don't reconcile.
+            let wasUserQueued = userQueuedIds.contains(id)
             // If this is the user-queued track playing, drop the
             // priority tag now — the user's intent has been honored
             // and we don't want it to re-fire on a future round-trip
@@ -1147,7 +1163,15 @@ final class PlayerBridge {
                 // race we've been chasing across BUG-2 rounds 1-4.
                 // See kaset's PlayerService+WebQueueSync for the
                 // pattern this implements.
-                reconcileWithUserQueueIfNeeded(observedVideoId: id)
+                //
+                // wasUserQueued gate: if the just-arrived track WAS in
+                // userQueuedIds, this is the user-queued play landing
+                // — let it play, don't yank to the next item in the
+                // set. Without this gate, album playback skipped
+                // every track after the first (BUG-2 round-5 hang).
+                if !wasUserQueued {
+                    reconcileWithUserQueueIfNeeded(observedVideoId: id)
+                }
             }
         }
         onUpdate?()
