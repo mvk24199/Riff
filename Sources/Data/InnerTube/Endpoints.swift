@@ -24,4 +24,5 @@ enum BrowseID {
     static let history           = "FEmusic_history"
     static let explore           = "FEmusic_explore"
     static let moodsAndGenres    = "FEmusic_moods_and_genres"
+    static let mixedForYou       = "FEmusic_mixed_for_you"
 }

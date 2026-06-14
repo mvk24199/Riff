@@ -6,6 +6,7 @@ struct LibraryView: View {
     @State private var sort: SortOrder = .recentlyAdded
     @State private var filterText: String = ""
     @State private var items: [MediaItem] = []
+    @State private var mixedForYou: [HomeSection] = []
     @State private var errorMessage: String?
 
     enum Section: String, CaseIterable, Identifiable {
@@ -129,6 +130,19 @@ struct LibraryView: View {
             .padding(.horizontal, 24)
 
             ScrollView {
+                // Personalized "Mixed for you" carousels sit above
+                // the section grid so the user sees auto-generated
+                // mixes (Supermix, Discover Mix, …) before the
+                // explicit library content. Anonymous responses are
+                // empty — the section hides itself entirely.
+                if !mixedForYou.isEmpty {
+                    LazyVStack(alignment: .leading, spacing: 24) {
+                        ForEach(mixedForYou) { section in
+                            HomeSectionRow(section: section)
+                        }
+                    }
+                    .padding(.bottom, 16)
+                }
                 if let errorMessage {
                     ErrorBanner(message: errorMessage) {
                         Task { await load() }
@@ -188,12 +202,28 @@ struct LibraryView: View {
     }
 
     private func load() async {
+        // Fan out: library section + Mixed-for-you in parallel. The
+        // mixed feed is best-effort — anonymous responses are empty
+        // and any failure should silently hide the carousels rather
+        // than show an error banner above the user's primary library
+        // content.
+        async let libraryFetch = env.innerTube.library(section: section)
+        async let mixedFetch = env.innerTube.browseMixedForYou()
         do {
-            items = try await env.innerTube.library(section: section)
+            items = try await libraryFetch
             errorMessage = nil
         } catch {
             items = []
             errorMessage = LoadErrorPresenter.message(for: error, env: env)
+        }
+        // try? collapses both "feed errored" and "feed returned empty"
+        // into the same hide-the-carousels code path — exactly what we
+        // want for a best-effort secondary surface.
+        let mixedRaw = (try? await mixedFetch) ?? []
+        mixedForYou = mixedRaw.compactMap { sec in
+            let kept = sec.items.filter { !env.isBlocked($0) }
+            guard !kept.isEmpty else { return nil }
+            return HomeSection(id: sec.id, title: sec.title, items: kept)
         }
     }
 }
