@@ -512,6 +512,13 @@
     const norm = {
         ctx: null, sourceNode: null, gainNode: null, analyser: null, timeData: null,
         enabled: false, measuring: false, measureStart: 0, sumSquares: 0, sampleCount: 0,
+        // Tick interval — only alive during the measurement window
+        // (5.5s after a track change), otherwise null. Constant-rate
+        // polling at 10Hz was the prior shape; idle 10Hz in WebKit on
+        // a heavy SPA like music.youtube.com showed up as ambient hangs
+        // on slow days. Now the timer literally doesn't exist outside
+        // of measurement.
+        tickIntervalId: null,
 
         init() {
             if (this.ctx) return;
@@ -537,9 +544,12 @@
 
         setEnabled(on) {
             this.enabled = !!on;
-            if (!on && this.gainNode && this.ctx) {
-                this.gainNode.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.05);
+            if (!on) {
+                this.stopTickInterval();
                 this.measuring = false;
+                if (this.gainNode && this.ctx) {
+                    this.gainNode.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.05);
+                }
             }
         },
 
@@ -557,10 +567,29 @@
             if (this.gainNode) {
                 this.gainNode.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.05);
             }
+            this.startTickInterval();
+        },
+
+        startTickInterval() {
+            if (this.tickIntervalId !== null) return;
+            this.tickIntervalId = setInterval(() => norm.tick(), 100);
+        },
+
+        stopTickInterval() {
+            if (this.tickIntervalId !== null) {
+                clearInterval(this.tickIntervalId);
+                this.tickIntervalId = null;
+            }
         },
 
         tick() {
-            if (!this.measuring || !this.analyser || !this.timeData) return;
+            if (!this.measuring || !this.analyser || !this.timeData) {
+                // Defensive: if we somehow got here without active
+                // measurement, kill the interval. Shouldn't happen,
+                // but cheap to guard.
+                this.stopTickInterval();
+                return;
+            }
             const skipMs = 500;
             const windowMs = 5000;
             const elapsedMs = (this.ctx.currentTime - this.measureStart) * 1000;
@@ -568,6 +597,7 @@
             if (elapsedMs > skipMs + windowMs) {
                 this.apply();
                 this.measuring = false;
+                this.stopTickInterval();
                 return;
             }
             this.analyser.getByteTimeDomainData(this.timeData);
@@ -594,7 +624,6 @@
         },
     };
     window.__riffNorm = norm;
-    setInterval(() => norm.tick(), 100);
 
     // ---- Kick off ---------------------------------------------------------
 
