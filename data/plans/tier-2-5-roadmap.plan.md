@@ -36,8 +36,12 @@ status: executing        # draft → approved → executing → done
       files: Models/MediaItem.swift, InnerTubeClient.swift, InnerTubeParserTests.swift
 - [x] **4. Search filters: year + duration** (depends on #3)
       files: SearchView.swift, SearchResultRow.swift
-- [ ] **5. Year-end Recap** (depends on #3 for richness)
+- [x] **5. Year-end Recap** (depends on #3 for richness)
       files: new Sources/UI/Recap/RecapView.swift, AppEnvironment.swift, RiffApp.swift
+      note: shipped as "Your Riff Highlights" — playedHistory cap is 50,
+            so the "year in review" framing would over-promise. Pure
+            stats math lives in RecapStats.compute(from:) and is covered
+            by Tests/RecapStatsTests.swift (12 new tests).
 - [ ] **6. Mixed-for-you Library section**
       files: LibraryView.swift, InnerTubeClient.swift
       prework: confirm `FEmusic_mixed_for_you` browseId against live YT Music
