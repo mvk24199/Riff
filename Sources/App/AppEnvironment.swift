@@ -54,6 +54,10 @@ final class AppEnvironment {
     /// Help menu entry; consumed by a `.sheet` on RootView.
     var isRecapSheetPresented: Bool = false
 
+    /// Drives the "Create lyric card" sheet. Raised from the lyrics
+    /// tab in NowPlayingView; consumed by a `.sheet` on RootView.
+    var isLyricCardSheetPresented: Bool = false
+
     /// Which source seeds the next-presented New Playlist sheet.
     /// Default is the historical behavior (add current track); the
     /// "Save queue" button on the Up Next pane flips this to `.queue`

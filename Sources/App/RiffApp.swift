@@ -258,6 +258,9 @@ struct RootView: View {
         .sheet(isPresented: $env.isRecapSheetPresented) {
             RecapView()
         }
+        .sheet(isPresented: $env.isLyricCardSheetPresented) {
+            LyricCardSheet()
+        }
     }
 }
 

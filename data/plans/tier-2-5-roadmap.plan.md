@@ -72,8 +72,16 @@ status: executing        # draft → approved → executing → done
             `player.rate.music` on first launch. NowPlayingView slider
             unchanged — it reads/writes `playbackRate` as before; the
             kind-keyed persistence is transparent. 8 new tests.
-- [ ] **10. Share URL + Lyric image cards**
-      files: PlayerBridge.swift, TrackContextMenu.swift, new Sources/UI/LyricCardSheet.swift
+- [x] **10. Share URL + Lyric image cards**
+      files: TrackContextMenu.swift, new Sources/UI/LyricCardSheet.swift,
+             NowPlayingView.swift, AppEnvironment.swift, RiffApp.swift
+      note: "Copy share link" added to TrackContextMenu (songs + episodes),
+            copies a music.youtube.com/watch?v=… URL to NSPasteboard.
+            "Create card" button on the lyrics tab in NowPlayingView raises
+            LyricCardSheet — editable snippet pre-seeded from synced or
+            plain lyrics, live preview, NSSavePanel-driven PNG export at
+            1080×1080 via ImageRenderer. Sheet hidden when nothing playing
+            or no lyrics available. No PlayerBridge changes needed.
 - [ ] **11. Phase 3 — App Intents (Spotlight + Siri + Shortcuts)**
       files: new Sources/Intents/RiffIntents.swift, project.yml
 - [ ] **12. Phase 3 — BYO-LLM (Anthropic + queue builder)**

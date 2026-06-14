@@ -667,27 +667,44 @@ struct NowPlayingView: View {
     }
 
     private var lyricsContent: some View {
-        Group {
-            if env.player.lyricsLoading {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Loading lyrics…")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.7))
+        VStack(alignment: .leading, spacing: 12) {
+            // "Create card" only when there's something to put on a card.
+            if !env.player.lyricsLoading,
+               (!env.player.lyricsLines.isEmpty || (env.player.lyrics?.isEmpty == false)) {
+                HStack {
+                    Spacer()
+                    Button {
+                        env.isLyricCardSheetPresented = true
+                    } label: {
+                        Label("Create card", systemImage: "square.and.arrow.up")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.white.opacity(0.7))
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 16)
-            } else if env.player.lyricsTimed && !env.player.lyricsLines.isEmpty {
-                syncedLyrics
-            } else if let text = env.player.lyrics, !text.isEmpty {
-                Text(text)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineSpacing(5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            } else {
-                emptyHint("Lyrics not available for this track.")
+            }
+            Group {
+                if env.player.lyricsLoading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading lyrics…")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 16)
+                } else if env.player.lyricsTimed && !env.player.lyricsLines.isEmpty {
+                    syncedLyrics
+                } else if let text = env.player.lyrics, !text.isEmpty {
+                    Text(text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineSpacing(5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                } else {
+                    emptyHint("Lyrics not available for this track.")
+                }
             }
         }
     }

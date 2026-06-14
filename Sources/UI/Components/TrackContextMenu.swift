@@ -86,6 +86,20 @@ struct TrackContextMenu: View {
             Divider()
             addToPlaylistMenu
         }
+        // "Copy share link" — the music.youtube.com URL for this
+        // track. Bottom of the menu so it doesn't bump the common
+        // queue/play actions down. Songs + episodes only (other
+        // kinds have their own kebab affordances; sharing an artist
+        // isn't really a thing).
+        if item.kind == .song || item.kind == .episode {
+            Divider()
+            Button("Copy share link") {
+                let url = "https://music.youtube.com/watch?v=\(item.id)"
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(url, forType: .string)
+            }
+        }
     }
 
     /// Nested submenu mirroring the now-playing "Add to Playlist…" picker
