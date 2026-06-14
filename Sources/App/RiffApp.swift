@@ -261,6 +261,9 @@ struct RootView: View {
         .sheet(isPresented: $env.isLyricCardSheetPresented) {
             LyricCardSheet()
         }
+        .sheet(isPresented: $env.isQueueBuilderSheetPresented) {
+            QueueBuilderSheet()
+        }
     }
 }
 

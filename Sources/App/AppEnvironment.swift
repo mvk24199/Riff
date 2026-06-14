@@ -69,6 +69,25 @@ final class AppEnvironment {
     /// tab in NowPlayingView; consumed by a `.sheet` on RootView.
     var isLyricCardSheetPresented: Bool = false
 
+    /// Drives the AI Queue Builder sheet (vibe → queue). Raised from
+    /// the "✨ Build" button in the Up Next pane header. Independent
+    /// of `isNewPlaylistSheetPresented` so the two can't collide.
+    var isQueueBuilderSheetPresented: Bool = false
+
+    /// Lazy LLM provider. The provider type itself is stateless —
+    /// secrets live in Keychain and are read fresh on every `chat()`
+    /// call so a key rotation doesn't require rebuilding the provider.
+    /// Lazy so app launch stays fast for users who never touch AI
+    /// features (no Keychain read on startup).
+    lazy var llmProvider: any LLMProvider = AnthropicProvider()
+
+    /// True when an Anthropic API key is configured. Drives the
+    /// "AI features" visibility in Settings + the Queue Builder
+    /// button affordance in the player.
+    var hasLLMAPIKey: Bool {
+        (AnthropicProvider.storedAPIKey()?.isEmpty == false)
+    }
+
     /// Which source seeds the next-presented New Playlist sheet.
     /// Default is the historical behavior (add current track); the
     /// "Save queue" button on the Up Next pane flips this to `.queue`

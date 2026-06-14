@@ -97,9 +97,16 @@ status: executing        # draft → approved → executing → done
             instance; the weak ref tracks it without risking duplicate
             WKWebViews). NSSiriUsageDescription added to Info.plist for
             voice-invocation path.
-- [ ] **12. Phase 3 — BYO-LLM (Anthropic + queue builder)**
+- [x] **12. Phase 3 — BYO-LLM (Anthropic + queue builder)**
       files: new Sources/AI/LLMProvider.swift, AnthropicProvider.swift,
              SettingsView.swift, new Sources/UI/Player/QueueBuilderSheet.swift
+      note: Initial scope is Anthropic-only (Haiku 4.5 default, Sonnet 4.6
+            offered). API key + model id live in Keychain under accounts
+            `riff.llm.anthropic` and `riff.llm.anthropic.model`; never
+            UserDefaults, never logged. Queue Builder raised from a
+            ✨ Build chip in the Up Next header; resolves suggestions
+            through `/search?filter=.songs` and waits for the user to
+            click Play all / Add to queue (no auto-enqueue).
 
 ## Bug backlog (track + revisit between feature steps)
 
