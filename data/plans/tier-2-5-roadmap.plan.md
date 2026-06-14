@@ -61,8 +61,8 @@ status: executing        # draft → approved → executing → done
 These are user-reported defects, not new features. They jump priority
 over later Tier 3+ items but slot below in-progress Tier 2 work.
 
-- [ ] **BUG-1. Up Next refreshes wholesale on every track change, losing
-      user intent.**
+- [x] **BUG-1. Up Next refreshes wholesale on every track change, losing
+      user intent.** Fixed in e0d652e.
       Symptom: as each new track plays, the Up Next pane gets replaced
       with the new /next response. Items the user reordered, queued
       ("Play next" / "Add to queue"), or were just visually relying on
@@ -82,8 +82,8 @@ over later Tier 3+ items but slot below in-progress Tier 2 work.
       a stale tail. Test path: start radio, click "Play next" on a
       song, let current track end, verify the user's song plays.
 
-- [ ] **BUG-2. "Play next" lands a track in Up Next but a different
-      one plays.**
+- [x] **BUG-2. "Play next" lands a track in Up Next but a different
+      one plays.** Fixed in e0d652e (co-fix of BUG-1).
       Symptom: clicking "Play next" inserts the song at the top of
       Up Next, but when the current track ends YT autoplays a
       different one. (Originally fixed in `93a9977` via video.ended
