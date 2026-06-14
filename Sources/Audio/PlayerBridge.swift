@@ -588,12 +588,14 @@ final class PlayerBridge {
     func playTracks(_ tracks: [MediaItem]) async {
         guard let first = tracks.first else { return }
         let rest = Array(tracks.dropFirst())
+        Log.bridge.debug("playTracks ENTRY firstId=\(first.id, privacy: .public) restCount=\(rest.count)")
         // Tag every upcoming track BEFORE calling play(item:) so the
         // preserve-merge inside play(item:)'s clear keeps them.
         for track in rest {
             userQueuedIds.insert(track.id)
         }
         queue.replaceQueue(rest)
+        Log.bridge.debug("playTracks AFTER replaceQueue upNext=\(self.upNext.count) userQueuedIds=\(self.userQueuedIds.count)")
         // Push the head pending URL to JS before we navigate so the
         // first track's ended event has the right next-URL ready.
         await syncPendingNextURL()

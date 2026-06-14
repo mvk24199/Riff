@@ -406,6 +406,7 @@ struct DetailView: View {
         // radio. The /browse album detail we already loaded has the
         // real tracklist — use it directly via playTracks so the
         // local queue chains through the actual album.
+        Log.bridge.debug("DetailView.playAll tracks=\(page.tracks.count) playablePlaylistId=\(page.playablePlaylistId ?? "nil", privacy: .public)")
         if !page.tracks.isEmpty {
             let backfilled = page.tracks.map { backfillArtwork($0, page: page) }
             await env.player.playTracks(backfilled)
