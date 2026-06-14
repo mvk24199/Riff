@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import SwiftUI
+import AppKit
 
 /// Top-level tab identifier. Lifted out of `MainTabs` so the app-level
 /// `CommandGroup` (which doesn't see private nested types) can bind ⌘1/2/3
@@ -129,6 +130,17 @@ final class AppEnvironment {
         // ~/Library/Application Support/Riff/diagnostics/. No network
         // exfiltration; user shares manually if asked.
         DiagnosticsCenter.shared.start()
+        // Snapshot the playback session on app exit so "Continue
+        // where you left off" survives a quit. The progress-driven
+        // snapshot is rate-limited to once-per-5s; this catches the
+        // delta between the last rate-limited write and quit.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [player] _ in
+            MainActor.assumeIsolated { player.snapshotSession() }
+        }
 
         // Mirror PlayerBridge state into MPNowPlayingInfoCenter on every
         // change. NowPlayingCenter holds a strong ref to player; here we go

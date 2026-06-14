@@ -308,9 +308,48 @@ struct NowPlayingView: View {
                 Task { await env.player.toggleRepeat() }
             }
             playbackRateMenu
+            sleepTimerMenu
             addToPlaylistMenu
             moreMenu
         }
+    }
+
+    /// Sleep-timer menu. Shows the running countdown when armed (mm:ss),
+    /// preset durations + cancel when idle. Mirrors YT Music mobile's
+    /// sleep-timer affordance. Persists for the session only — Apple
+    /// Music, YT Music, Spotify all behave this way.
+    private var sleepTimerMenu: some View {
+        Menu {
+            if env.player.sleepTimerRemaining != nil {
+                Button("Cancel timer") { env.player.cancelSleepTimer() }
+                Divider()
+            }
+            ForEach([5, 10, 15, 30, 45, 60], id: \.self) { minutes in
+                Button("\(minutes) min") { env.player.setSleepTimer(minutes: minutes) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "moon.zzz")
+                    .font(.system(size: 16, weight: .semibold))
+                if let remaining = env.player.sleepTimerRemaining {
+                    Text(formatTimer(remaining))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                }
+            }
+            .foregroundStyle(env.player.sleepTimerRemaining == nil ? .white.opacity(0.7) : Theme.red)
+            .frame(height: 40)
+            .padding(.horizontal, 4)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(env.player.sleepTimerRemaining == nil ? "Sleep timer" : "Sleep in \(formatTimer(env.player.sleepTimerRemaining!))")
+    }
+
+    private func formatTimer(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.up))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     /// "More" (•••) menu — surfaces Go to album / Go to artist / Start

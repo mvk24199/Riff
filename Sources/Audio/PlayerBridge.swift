@@ -101,12 +101,100 @@ final class PlayerBridge {
         // QueueManager loads its own persisted history; nothing to do
         // here besides depending on the `let queue = QueueManager()`
         // initializer that already ran.
+        // Restore "what was playing" so the mini bar isn't empty on
+        // launch. Doesn't auto-play — the WebView won't navigate
+        // until the user presses play.
+        restoreLastSession()
     }
 
     private static let volumeKey = "player.volume"
     private static let rateKey   = "player.rate"
     private static let repeatKey = "player.repeat"
     private static let shuffleKey = "player.shuffle"
+    private static let lastSessionKey = "player.lastSession"
+
+    /// Snapshot of "what was playing when the user quit" — mirrors YT
+    /// Music's behavior of showing your last-played track on the mini
+    /// bar at app launch. Press play to resume from the saved position.
+    /// Not auto-resumed: launching the app shouldn't blast audio at
+    /// you; the user has to opt in by pressing play.
+    private struct LastSession: Codable {
+        let videoId: String
+        let title: String
+        let subtitle: String
+        let thumbnailURL: URL?
+        let albumId: String?
+        let artistId: String?
+        let elapsed: Double
+        let duration: Double
+        let savedAt: Date
+    }
+
+    /// (videoId, elapsed) pending playback. Set during init when a
+    /// LastSession was restored; consumed by the next user-initiated
+    /// play action (`togglePlay` checks for it first). nil otherwise.
+    @ObservationIgnored
+    private var pendingResume: (videoId: String, elapsed: Double)? = nil
+
+    /// Persist a snapshot of the currently-playing track. Called on
+    /// every progress event (rate-limited via `lastSnapshotAt`) and on
+    /// app exit. UserDefaults write is atomic so a crash mid-write
+    /// can't corrupt the snapshot.
+    @ObservationIgnored private var lastSnapshotAt: Date = .distantPast
+    private static let snapshotEverySeconds: TimeInterval = 5
+
+    private func snapshotSessionIfDue() {
+        let now = Date()
+        guard now.timeIntervalSince(lastSnapshotAt) >= Self.snapshotEverySeconds else { return }
+        snapshotSession()
+    }
+
+    /// Force a snapshot — used on app exit and on every track change
+    /// regardless of the snapshot rate-limit.
+    func snapshotSession() {
+        guard let track = currentTrack else { return }
+        lastSnapshotAt = Date()
+        let snap = LastSession(
+            videoId: track.videoId,
+            title: track.title,
+            subtitle: track.subtitle,
+            thumbnailURL: track.thumbnailURL,
+            albumId: track.albumId,
+            artistId: track.artistId,
+            elapsed: elapsed,
+            duration: duration,
+            savedAt: Date()
+        )
+        if let data = try? JSONEncoder().encode(snap) {
+            UserDefaults.standard.set(data, forKey: Self.lastSessionKey)
+        }
+    }
+
+    private func restoreLastSession() {
+        guard let data = UserDefaults.standard.data(forKey: Self.lastSessionKey),
+              let snap = try? JSONDecoder().decode(LastSession.self, from: data) else {
+            return
+        }
+        // Don't restore if the session is older than 7 days — at that
+        // point the user has likely moved on, and showing a stale
+        // mini-bar on launch is more confusing than helpful.
+        if Date().timeIntervalSince(snap.savedAt) > 7 * 24 * 60 * 60 { return }
+        currentTrack = Track(
+            videoId: snap.videoId,
+            title: snap.title,
+            subtitle: snap.subtitle,
+            thumbnailURL: snap.thumbnailURL,
+            duration: snap.duration,
+            albumId: snap.albumId,
+            artistId: snap.artistId
+        )
+        elapsed = snap.elapsed
+        duration = snap.duration
+        // Stash the resume target — consumed by the first user play.
+        if snap.elapsed > 1 {
+            pendingResume = (videoId: snap.videoId, elapsed: snap.elapsed)
+        }
+    }
 
     /// Repeat modes. `.off` is YT Music's natural autoplay; `.one`
     /// loops the current `<video>` source via the browser's native
@@ -455,7 +543,30 @@ final class PlayerBridge {
         await eval("window.musicBridge.navigate(\(url.jsonQuoted))")
     }
 
-    func togglePlay() async { await eval("window.musicBridge.togglePlay()") }
+    func togglePlay() async {
+        // Consume a pending resume from the restored session: the
+        // WebView hasn't navigated to the saved track yet, so a plain
+        // togglePlay would target an empty <video>. Instead navigate
+        // to the track and seek to the saved position once playback
+        // begins.
+        if let resume = pendingResume {
+            pendingResume = nil
+            let savedElapsed = resume.elapsed
+            await play(videoId: resume.videoId)
+            // Seek after a brief delay to let the new media source
+            // load — the JS bridge's seek() targets the current
+            // <video>'s currentTime, which is 0 until the media is
+            // ready. 1.5s is empirically enough for warm WebView; if
+            // the load is slow the seek lands at 0 which is the same
+            // as "play from start" (acceptable fallback).
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if duration > 0, savedElapsed < duration {
+                await seek(to: savedElapsed / duration)
+            }
+            return
+        }
+        await eval("window.musicBridge.togglePlay()")
+    }
     /// Advance to the next track. With shuffle ON we pick a random
     /// upcoming item and play it directly via `play(item:)` — that
     /// gives the user-driven "Next" press a randomized order even
@@ -583,6 +694,52 @@ final class PlayerBridge {
         queue.move(videoId: videoId, by: offset)
     }
 
+    // MARK: - Sleep timer
+
+    /// Seconds remaining before the sleep timer fires, or nil when no
+    /// timer is set. Updated once per second by `sleepTimerTask` so
+    /// the UI can display a live countdown.
+    private(set) var sleepTimerRemaining: TimeInterval? = nil
+
+    @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
+
+    /// Arm a sleep timer that pauses playback after `minutes`. Replaces
+    /// any existing timer. Intentionally not persisted across launches
+    /// — sleep timers are session-scoped by every other player's
+    /// convention (Apple Music, YT Music mobile, Spotify).
+    func setSleepTimer(minutes: Int) {
+        cancelSleepTimer()
+        let totalSeconds = TimeInterval(minutes * 60)
+        sleepTimerRemaining = totalSeconds
+        let startedAt = Date()
+        sleepTimerTask = Task { [weak self] in
+            // Tick once per second so the UI shows live countdown.
+            // Loop instead of one big sleep so cancellation is prompt.
+            while !Task.isCancelled {
+                let elapsed = Date().timeIntervalSince(startedAt)
+                let remaining = max(0, totalSeconds - elapsed)
+                await MainActor.run { self?.sleepTimerRemaining = remaining }
+                if remaining <= 0 { break }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                if self.isPlaying {
+                    Task { await self.togglePlay() }
+                }
+                self.sleepTimerRemaining = nil
+                self.sleepTimerTask = nil
+            }
+        }
+    }
+
+    func cancelSleepTimer() {
+        sleepTimerTask?.cancel()
+        sleepTimerTask = nil
+        sleepTimerRemaining = nil
+    }
+
     /// Volume 0.0...1.0. Persisted across track changes within the session
     /// (defaults to 1.0 on launch, the WebView's natural state).
     private(set) var volume: Double = 1.0
@@ -683,6 +840,10 @@ final class PlayerBridge {
             }
             elapsed = t
             duration = d
+            // Snapshot for "Continue where you left off" — rate-limited
+            // to one write per `snapshotEverySeconds` so we're not
+            // writing UserDefaults every 500 ms.
+            snapshotSessionIfDue()
         case .trackChanged(let id, let playlistId, let title, let artist, let art):
             // Time-gated dedupe. Within 30s of a play(item:), we trust the
             // user-clicked metadata over JS-side reports for the same
@@ -753,6 +914,10 @@ final class PlayerBridge {
                 currentPlaylistId = playlistId
                 userClickedAt = .distantPast  // stop being protective
                 refreshNextQueueAndIds(forVideoId: id, playlistId: playlistId)
+                // New track → snapshot now (rather than waiting for
+                // the rate-limited progress snapshot) so a quick
+                // skip-then-quit still captures the latest track.
+                snapshotSession()
             }
         }
         onUpdate?()
