@@ -71,7 +71,16 @@
         v.addEventListener("play",       () => postEvent({ event: "stateChanged", isPlaying: true }));
         v.addEventListener("pause",      () => postEvent({ event: "stateChanged", isPlaying: false }));
         v.addEventListener("timeupdate", () => postEvent({ event: "progress", currentTime: v.currentTime, duration: v.duration }));
-        v.addEventListener("ended",      () => postEvent({ event: "stateChanged", isPlaying: false }));
+        // Track-ended needs its own channel: Swift uses it to drive
+        // user-queued "Play next" items (override YT Music's natural
+        // autoplay so the song the user selected actually plays).
+        // We ALSO fire stateChanged so existing state machinery sees
+        // the pause; the two are not redundant — `ended` is the
+        // edge-trigger, stateChanged is the level.
+        v.addEventListener("ended", () => {
+            postEvent({ event: "ended" });
+            postEvent({ event: "stateChanged", isPlaying: false });
+        });
     }
 
     // Watch navigator.mediaSession.metadata + the URL videoId together — that

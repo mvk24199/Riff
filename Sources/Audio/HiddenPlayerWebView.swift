@@ -19,6 +19,12 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
         case stateChanged(isPlaying: Bool)
         case progress(currentTime: Double, duration: Double)
         case trackChanged(videoId: String, playlistId: String?, title: String, artist: String, artwork: URL?)
+        /// Fired when the video element reaches end-of-stream. Distinct
+        /// from `stateChanged(isPlaying: false)` (which also fires on
+        /// user-paused) — `ended` is an edge that lets PlayerBridge
+        /// jump to a user-queued "Play next" item before YT Music's
+        /// natural autoplay kicks in.
+        case ended
     }
 
     override init() {
@@ -95,6 +101,8 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
             let artist = (body["artist"] as? String) ?? ""
             let artwork = (body["artwork"] as? String).flatMap(URL.init(string:))
             return .trackChanged(videoId: videoId, playlistId: playlistId, title: title, artist: artist, artwork: artwork)
+        case "ended":
+            return .ended
         default:
             return nil
         }

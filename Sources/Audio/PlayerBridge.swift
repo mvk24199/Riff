@@ -74,6 +74,16 @@ final class PlayerBridge {
     @ObservationIgnored
     var shouldBlock: (MediaItem) -> Bool = { _ in false }
 
+    /// VideoIds of tracks the user has explicitly inserted into upNext
+    /// via "Play next" / "Add to queue". When the current `<video>`
+    /// reaches `ended`, we navigate to the first match instead of
+    /// letting YT Music's natural autoplay pick a different radio
+    /// suggestion. Cleared on consume so the same item only takes
+    /// priority once. Tracks NOT in this set advance via the page's
+    /// normal autoplay (no interception, no race).
+    @ObservationIgnored
+    private var userQueuedIds: Set<String> = []
+
     @ObservationIgnored
     private let innerTube: InnerTubeClient
 
@@ -600,6 +610,10 @@ final class PlayerBridge {
     /// With shuffle OFF, fall through to the page's `.next-button`
     /// click as before.
     func next() async {
+        // Priority 1: a user-queued "Play next" / "Add to queue"
+        // item always wins. This is the same path autoplay-on-ended
+        // uses; consuming through user-skip just preempts it.
+        if await advanceToUserQueuedIfAny() { return }
         if shuffleEnabled, !upNext.isEmpty {
             let currentId = currentTrack?.videoId
             let candidates = upNext.filter { $0.id != currentId }
@@ -679,18 +693,49 @@ final class PlayerBridge {
         return plid
     }
 
-    /// Insert `item` immediately after the current track in the local
-    /// Up Next list — equivalent to YT Music's "Play next". Same caveat
-    /// as `removeFromQueue`: the WebView's actual playback queue isn't
-    /// mutated, so when the current track ends YT will autoplay
-    /// whatever IT thinks is next, not necessarily the inserted item.
-    /// The user can click the row in Up Next to switch to it
-    /// immediately, which is the intended workflow.
-    func playNext(item: MediaItem) { queue.playNext(item) }
+    /// Insert `item` at the top of the local Up Next list — YT
+    /// Music's "Play next". Tagged in `userQueuedIds` so when the
+    /// current track ends the `ended` event handler navigates to it
+    /// instead of letting YT Music's natural autoplay pick something
+    /// else. (Earlier versions of this method documented a local-only
+    /// caveat: the WebView's server queue wasn't mutated, so YT's
+    /// autoplay won and the user-queued track was silently skipped.
+    /// The autoplay-interception path above is the fix for that.)
+    func playNext(item: MediaItem) {
+        queue.playNext(item)
+        userQueuedIds.insert(item.id)
+    }
 
     /// Append `item` to the bottom of the local Up Next list — YT
-    /// Music's "Add to queue". Same local-only caveat as `playNext`.
-    func addToQueueEnd(item: MediaItem) { queue.addToEnd(item) }
+    /// Music's "Add to queue". Same autoplay-interception semantics
+    /// as `playNext` — when the current track ends, the head of
+    /// `userQueuedIds` (which includes everything the user has added)
+    /// gets played; the order in `upNext` is the play order.
+    func addToQueueEnd(item: MediaItem) {
+        queue.addToEnd(item)
+        userQueuedIds.insert(item.id)
+    }
+
+    /// Advance to the head user-queued item if one exists. Returns
+    /// `true` if it navigated, `false` if no user-queued item is
+    /// queued (caller falls through to the natural autoplay path).
+    /// Consumes the id from the tracking set so a single click of
+    /// "Play next" only takes priority once.
+    @discardableResult
+    private func advanceToUserQueuedIfAny() async -> Bool {
+        // Walk upNext in order; the first item whose id is in
+        // userQueuedIds is "the user's explicit next". Skipping
+        // current item is implicit — the current track is removed
+        // from upNext by the queue's own filter elsewhere.
+        for item in upNext {
+            if userQueuedIds.contains(item.id) {
+                userQueuedIds.remove(item.id)
+                await play(item: item)
+                return true
+            }
+        }
+        return false
+    }
 
     /// Explicitly start the auto-radio for `item` — same flow as
     /// `play(item:)` since RDAMVM is our default. Kept as a separate
@@ -708,6 +753,10 @@ final class PlayerBridge {
     /// implement a JS bridge into the page's queue API.
     func removeFromQueue(videoId: String) async {
         queue.remove(videoId: videoId)
+        // If the user removed a row they had earlier "Play next"'d,
+        // drop it from the priority set so a later /next refresh that
+        // reintroduces the same videoId doesn't resurrect the priority.
+        userQueuedIds.remove(videoId)
     }
 
     /// Local-only reorder. Same caveat as removeFromQueue: this only
@@ -852,6 +901,21 @@ final class PlayerBridge {
             }
         case .stateChanged(let playing):
             isPlaying = playing
+        case .ended:
+            // Track reached end-of-stream. If the user explicitly
+            // queued a track via "Play next" / "Add to queue", play
+            // it now — this is the autoplay-interception path that
+            // makes those affordances actually work. If no
+            // user-queued item is present, do nothing and let YT
+            // Music's natural autoplay take over (the page's own
+            // `ended` handler will advance to the next radio
+            // suggestion). The race between our navigate and YT's
+            // autoplay is won by us: `location.href = …` aborts
+            // in-flight navigation.
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.advanceToUserQueuedIfAny()
+            }
         case .progress(let t, let d):
             // Filter stale events that arrive in the window right after a
             // track change. YT Music's SPA can keep firing `timeupdate`
@@ -869,6 +933,11 @@ final class PlayerBridge {
             // writing UserDefaults every 500 ms.
             snapshotSessionIfDue()
         case .trackChanged(let id, let playlistId, let title, let artist, let art):
+            // If this is the user-queued track playing, drop the
+            // priority tag now — the user's intent has been honored
+            // and we don't want it to re-fire on a future round-trip
+            // (e.g. /next reintroducing the same id back into upNext).
+            userQueuedIds.remove(id)
             // Time-gated dedupe. Within 30s of a play(item:), we trust the
             // user-clicked metadata over JS-side reports for the same
             // videoId — catches pre-roll ads (which all happen in the

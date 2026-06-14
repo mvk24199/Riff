@@ -13,7 +13,9 @@ import SwiftUI
 /// All actions are gated on data we actually have:
 ///   - Play / Start radio: always shown for songs/episodes
 ///   - Play next / Add to queue: shown when there's a current track
-///     (so the queue exists). Local-only — same caveat as `removeFromQueue`.
+///     (so the queue exists). Tagged in PlayerBridge's userQueuedIds
+///     so when the current track reaches end-of-stream we navigate
+///     to the user-queued item, beating YT Music's natural autoplay.
 ///   - Go to album: only when the row's MediaItem carries `albumId`
 ///   - Go to artist: only when the row carries `artistId`
 ///   - Add to playlist: signed-in only
