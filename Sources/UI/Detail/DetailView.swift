@@ -437,9 +437,27 @@ private struct TrackRow: View {
     let onRemoveFromPlaylist: ((String) async -> Void)?
 
     @State private var hovering = false
+    /// Row-local optimistic like state for *non-current* rows. We
+    /// intentionally don't fetch the canonical like status for every
+    /// row in the tracklist — that would require an N-row /next fetch
+    /// per detail page, which is way too expensive for an affordance
+    /// that's only visible on hover. Instead the heart starts hollow
+    /// and flips optimistically on tap, with the InnerTube
+    /// like/removeLike fired in the background. For the currently-
+    /// playing row we ignore this and drive directly from
+    /// `env.player.liked`, which IS canonical (PlayerBridge syncs it
+    /// against /next on every track change).
+    @State private var likedOptimistic: Bool = false
 
     private var isCurrent: Bool {
         env.player.currentTrack?.videoId == item.id
+    }
+
+    /// Effective like state for the heart icon. Current row trusts
+    /// the PlayerBridge; other rows fall back to the row-local
+    /// optimistic flag.
+    private var isLiked: Bool {
+        isCurrent ? env.player.liked : likedOptimistic
     }
 
     var body: some View {
@@ -461,13 +479,20 @@ private struct TrackRow: View {
                     Text(item.title)
                         .font(.system(size: 14, weight: isCurrent ? .semibold : .medium))
                         .foregroundStyle(isCurrent ? Theme.red : .white)
-                        .lineLimit(1)
+                        .lineLimit(2)
                     Text(item.subtitle)
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(isCurrent ? 0.75 : 0.55))
                         .lineLimit(1)
                 }
                 Spacer()
+                // Hover-revealed action cluster: like + overflow menu.
+                // Sits between the title block and the duration, fading
+                // in on hover. Duration stays put — on narrow rows the
+                // icons crowd it, which is acceptable since right-click
+                // remains a full fallback.
+                actionButtons
+                    .opacity(hovering ? 1 : 0)
                 if let secs = item.durationSeconds {
                     Text(formatRowDuration(secs))
                         .font(.system(size: 12, design: .monospaced))
@@ -475,7 +500,7 @@ private struct TrackRow: View {
                         .padding(.trailing, 8)
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
             .padding(.horizontal, 32)
             .contentShape(Rectangle())
         }
@@ -495,6 +520,10 @@ private struct TrackRow: View {
             }
         )
         .onHover { hovering = $0 }
+        // Cross-fade the leading-column icon swap, the action button
+        // cluster, and the row background as hover toggles. 150ms
+        // easeOut feels responsive without dragging on quick mouseovers.
+        .animation(.easeOut(duration: 0.15), value: hovering)
         .contextMenu {
             TrackContextMenu(item: item)
             if isUserOwnedPlaylist, let setId = item.setVideoId, let onRemove = onRemoveFromPlaylist {
@@ -504,6 +533,73 @@ private struct TrackRow: View {
                 }
             }
         }
+    }
+
+    /// Hover-revealed action cluster: like heart + overflow menu.
+    /// Both icons live here so they share one opacity drive from the
+    /// parent. The overflow menu re-exposes the same entries as the
+    /// right-click context menu (TrackContextMenu + the
+    /// playlist-owner Remove entry), giving users without a trackpad
+    /// or a knowledge of right-click an equally-discoverable path.
+    @ViewBuilder
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                if isCurrent {
+                    Task { await env.player.toggleLike() }
+                } else {
+                    // Non-current row: optimistically flip the heart
+                    // and fire the InnerTube call in the background.
+                    // We don't roll back on error — the canonical
+                    // state is one /next call away (the row will
+                    // re-render with truth the moment it becomes the
+                    // current track), and a stuck optimistic state
+                    // for a non-playing row is benign.
+                    let willLike = !likedOptimistic
+                    likedOptimistic = willLike
+                    let videoId = item.id
+                    Task {
+                        do {
+                            if willLike {
+                                try await env.innerTube.like(videoId: videoId)
+                            } else {
+                                try await env.innerTube.removeLike(videoId: videoId)
+                            }
+                        } catch {
+                            // Swallow: cheap affordance, not worth a
+                            // banner. Next /next fetch will reconcile.
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: isLiked ? "heart.fill" : "heart")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isLiked ? Theme.red : .white.opacity(0.7))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                TrackContextMenu(item: item)
+                if isUserOwnedPlaylist, let setId = item.setVideoId, let onRemove = onRemoveFromPlaylist {
+                    Divider()
+                    Button("Remove from this playlist") {
+                        Task { await onRemove(setId) }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+        .padding(.trailing, 4)
     }
 
     /// Leading column. Width is fixed so titles align across rows
