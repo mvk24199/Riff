@@ -48,6 +48,16 @@
             const v = videoEl();
             if (v) v.loop = !!enabled;
         },
+        // Park a URL on the page so that when the current track ends,
+        // the `ended` listener navigates synchronously to it —
+        // beating YT Music's own autoplay handler. The empty string
+        // (or any falsy value) clears it. Set by Swift whenever the
+        // head of upNext is a user-queued track; cleared when the
+        // user-queued track itself starts playing (Swift will push
+        // the next user-queued URL, if any, or clear).
+        setPendingNextURL(url) {
+            window.__riffPendingNextUrl = url || null;
+        },
         next()       { document.querySelector(".next-button")?.click(); },
         previous()   { document.querySelector(".previous-button")?.click(); },
         seek(fraction) {
@@ -71,15 +81,26 @@
         v.addEventListener("play",       () => postEvent({ event: "stateChanged", isPlaying: true }));
         v.addEventListener("pause",      () => postEvent({ event: "stateChanged", isPlaying: false }));
         v.addEventListener("timeupdate", () => postEvent({ event: "progress", currentTime: v.currentTime, duration: v.duration }));
-        // Track-ended needs its own channel: Swift uses it to drive
-        // user-queued "Play next" items (override YT Music's natural
-        // autoplay so the song the user selected actually plays).
-        // We ALSO fire stateChanged so existing state machinery sees
-        // the pause; the two are not redundant — `ended` is the
-        // edge-trigger, stateChanged is the level.
+        // Track-ended needs its own channel + a synchronous in-page
+        // navigation override. Both YT Music's autoplay handler AND
+        // ours fire on the same video.ended. If we round-trip
+        // through Swift first, YT's handler wins the race and
+        // advances to a radio suggestion before our navigate
+        // arrives. Solution: Swift pre-pushes the URL for the
+        // user-queued track into window.__riffPendingNextUrl, and
+        // this listener consumes it synchronously — the navigate
+        // happens in the same microtask as YT's own handler so we
+        // tie or win.
         v.addEventListener("ended", () => {
             postEvent({ event: "ended" });
             postEvent({ event: "stateChanged", isPlaying: false });
+            const pending = window.__riffPendingNextUrl;
+            if (pending) {
+                // Clear before navigating so a fast reload of this
+                // page doesn't re-consume the same URL.
+                window.__riffPendingNextUrl = null;
+                location.href = pending;
+            }
         });
     }
 

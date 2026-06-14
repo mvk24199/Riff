@@ -743,6 +743,7 @@ final class PlayerBridge {
     func playNext(item: MediaItem) {
         queue.playNext(item)
         userQueuedIds.insert(item.id)
+        Task { await syncPendingNextURL() }
     }
 
     /// Append `item` to the bottom of the local Up Next list — YT
@@ -753,6 +754,7 @@ final class PlayerBridge {
     func addToQueueEnd(item: MediaItem) {
         queue.addToEnd(item)
         userQueuedIds.insert(item.id)
+        Task { await syncPendingNextURL() }
     }
 
     /// Advance to the head user-queued item if one exists. Returns
@@ -769,11 +771,36 @@ final class PlayerBridge {
         for item in upNext {
             if userQueuedIds.contains(item.id) {
                 userQueuedIds.remove(item.id)
+                await syncPendingNextURL()
                 await play(item: item)
                 return true
             }
         }
         return false
+    }
+
+    /// Push the head user-queued track's watch URL into the page's
+    /// `window.__riffPendingNextUrl` so the JS-side ended listener
+    /// can navigate synchronously when YT Music's autoplay would
+    /// otherwise win the race. Called every time `userQueuedIds`
+    /// changes (insert / remove / advanced-by-end / consumed-by-skip).
+    /// Pushes an empty string when nothing is pending, which the JS
+    /// treats as "clear" and falls back to YT's natural autoplay.
+    private func syncPendingNextURL() async {
+        let curId = currentTrack?.videoId
+        let head = upNext.first { userQueuedIds.contains($0.id) && $0.id != curId }
+        let url: String
+        if let head {
+            // Use the same auto-radio playlist scheme as play(item:) so
+            // /next on the new track produces a proper radio queue
+            // instead of just the track itself.
+            let radio = Self.radioPlaylistId(for: head.id)
+            url = watchURL(videoId: head.id, playlistId: radio)
+        } else {
+            url = ""  // clear
+        }
+        Log.bridge.debug("syncPendingNextURL → \(url, privacy: .public)")
+        await eval("window.musicBridge.setPendingNextURL(\(url.jsonQuoted))")
     }
 
     /// Explicitly start the auto-radio for `item` — same flow as
@@ -796,6 +823,7 @@ final class PlayerBridge {
         // drop it from the priority set so a later /next refresh that
         // reintroduces the same videoId doesn't resurrect the priority.
         userQueuedIds.remove(videoId)
+        await syncPendingNextURL()
     }
 
     /// Local-only reorder. Same caveat as removeFromQueue: this only
@@ -943,17 +971,18 @@ final class PlayerBridge {
         case .ended:
             // Track reached end-of-stream. If the user explicitly
             // queued a track via "Play next" / "Add to queue", play
-            // it now — this is the autoplay-interception path that
-            // makes those affordances actually work. If no
-            // user-queued item is present, do nothing and let YT
-            // Music's natural autoplay take over (the page's own
-            // `ended` handler will advance to the next radio
-            // suggestion). The race between our navigate and YT's
-            // autoplay is won by us: `location.href = …` aborts
-            // in-flight navigation.
+            // it now. The race against YT Music's natural autoplay
+            // (which also fires on the same video.ended) is now won
+            // proactively in the JS bridge — see setPendingNextURL
+            // below; this Swift-side handler is a belt-and-braces
+            // fallback for the case where the JS interception didn't
+            // fire (e.g. user clicked Play next within a few ms of
+            // end-of-stream and we didn't have time to push the URL).
+            Log.bridge.debug(".ended fired; userQueuedIds=\(self.userQueuedIds, privacy: .public) upNextHeadIds=\(self.upNext.prefix(3).map(\.id), privacy: .public)")
             Task { [weak self] in
                 guard let self else { return }
-                _ = await self.advanceToUserQueuedIfAny()
+                let advanced = await self.advanceToUserQueuedIfAny()
+                Log.bridge.debug(".ended → advanceToUserQueuedIfAny returned \(advanced, privacy: .public)")
             }
         case .progress(let t, let d):
             // Filter stale events that arrive in the window right after a
@@ -977,6 +1006,12 @@ final class PlayerBridge {
             // and we don't want it to re-fire on a future round-trip
             // (e.g. /next reintroducing the same id back into upNext).
             userQueuedIds.remove(id)
+            // Always resync the pending URL after a track change:
+            // page navigations reset window.__riffPendingNextUrl
+            // (new page = new window), so we have to push the next
+            // user-queued URL on every fresh load. Cheap — one JS
+            // eval that's effectively a no-op when nothing's queued.
+            Task { await syncPendingNextURL() }
             // Time-gated dedupe. Within 30s of a play(item:), we trust the
             // user-clicked metadata over JS-side reports for the same
             // videoId — catches pre-roll ads (which all happen in the
