@@ -571,6 +571,35 @@ final class PlayerBridge {
     /// for proper PL... / OLAK5uy_... ids); on failure falls back to the
     /// browseId resolver path which will fetch the playlist's first track
     /// and navigate /watch?v=&list= explicitly.
+    /// Play a fully-parsed tracklist in order — used by album +
+    /// playlist detail pages so we get the actual tracklist instead
+    /// of trusting YT's playlist queue API (which for many albums
+    /// returns just the seed track, causing autoplay to fall into
+    /// unrelated radio after song 1).
+    ///
+    /// The first track is played via the standard `play(item:)`
+    /// flow. Every remaining track gets tagged in `userQueuedIds`
+    /// so it survives /next refreshes (preserve-merge logic) and
+    /// chains via the autoplay-interception path (the JS
+    /// capture-phase ended listener consumes the head pending URL).
+    /// Effectively turns the album into an explicit local queue —
+    /// no race with YT's autoplay because we're driving each
+    /// transition ourselves.
+    func playTracks(_ tracks: [MediaItem]) async {
+        guard let first = tracks.first else { return }
+        let rest = Array(tracks.dropFirst())
+        // Tag every upcoming track BEFORE calling play(item:) so the
+        // preserve-merge inside play(item:)'s clear keeps them.
+        for track in rest {
+            userQueuedIds.insert(track.id)
+        }
+        queue.replaceQueue(rest)
+        // Push the head pending URL to JS before we navigate so the
+        // first track's ended event has the right next-URL ready.
+        await syncPendingNextURL()
+        await play(item: first)
+    }
+
     func playPlaylist(id: String) async {
         // Strip a "VL" prefix if it's still attached — VL ids are browse
         // ids (used to fetch playlist details), not playable ids.

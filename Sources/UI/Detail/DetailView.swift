@@ -400,10 +400,20 @@ struct DetailView: View {
     }
 
     private func playAll(_ page: InnerTubeClient.DetailPage) async {
-        if let plid = page.playablePlaylistId {
+        // Prefer our parsed tracklist over YT's playlist queue. YT's
+        // playlist API often returns just the album's seed track
+        // (queue=1) and after it ends autoplay falls into unrelated
+        // radio. The /browse album detail we already loaded has the
+        // real tracklist — use it directly via playTracks so the
+        // local queue chains through the actual album.
+        if !page.tracks.isEmpty {
+            let backfilled = page.tracks.map { backfillArtwork($0, page: page) }
+            await env.player.playTracks(backfilled)
+        } else if let plid = page.playablePlaylistId {
+            // Empty tracklist — fall back to YT's playlist endpoint.
+            // Reaches here only for entities where we couldn't parse
+            // any tracks (rare; mostly broken responses).
             await env.player.playPlaylist(id: plid)
-        } else if let first = page.tracks.first {
-            await env.player.play(item: backfillArtwork(first, page: page))
         }
     }
 
@@ -439,13 +449,13 @@ struct DetailView: View {
     }
 
     private func shuffle(_ page: InnerTubeClient.DetailPage) async {
-        // Pick a random track to start; YT Music's "shuffle" semantics are
-        // server-driven (the watch page shuffles the queue) but we don't
-        // have a clean param token, so the first random track is a
-        // pragmatic stand-in.
-        if let track = page.tracks.randomElement() {
-            await env.player.play(item: backfillArtwork(track, page: page))
-        }
+        // Same path as playAll but with the local tracklist permuted.
+        // YT's server-side shuffle endpoint isn't reachable from
+        // public params; we drive a local-shuffled order through
+        // playTracks so the entire shuffle chains via the queue.
+        guard !page.tracks.isEmpty else { return }
+        let shuffled = page.tracks.shuffled().map { backfillArtwork($0, page: page) }
+        await env.player.playTracks(shuffled)
     }
 
     /// Returns `track` with its missing thumbnail filled from the
