@@ -2,215 +2,365 @@
  * player-bridge.js
  *
  * Injected into music.youtube.com at documentStart by the hidden WKWebView.
- * Exposes window.musicBridge.{playVideo, playAlbum, playPlaylist, playPodcast,
- * playArtistRadio, togglePlay, next, previous, seek, getState} so the Swift
- * side can drive playback through a stable surface, regardless of how YT Music
- * restructures its internals.
+ * Exposes window.musicBridge.{...} so the Swift side can drive playback
+ * through a stable surface, regardless of how YT Music restructures its
+ * internals.
  *
- * Also wires navigator.mediaSession events back to Swift via
- * webkit.messageHandlers.bridge.postMessage(...).
+ * Architecture (rewritten 2026-06 based on research into
+ * th-ch/youtube-music + sozercan/kaset, both of which converged on this
+ * approach):
+ *
+ *   1. Track-change detection — subscribe to YT's own
+ *      `playerApi.addEventListener('videodatachange', …)`. This is the
+ *      canonical event YT itself dispatches on MSE source-swap, the same
+ *      moment the underlying audio source changes. It fires reliably
+ *      where <video>.ended does NOT (YT's MSE pipeline doesn't end the
+ *      stream — it just swaps the source mid-flight).
+ *
+ *   2. State change + end-of-track — subscribe to
+ *      `playerApi.addEventListener('onStateChange', …)`. State codes:
+ *        -1 unstarted, 0 ENDED, 1 PLAYING, 2 PAUSED, 3 BUFFERING, 5 CUED
+ *      State 0 is the real "natural end of track" signal — fires before
+ *      YT's own autoplay handler advances the source. Replaces the
+ *      window-capture-phase `ended` listener and the timeupdate
+ *      EOT-window heuristic that were patched in earlier rounds.
+ *
+ *   3. Setup gate — the playerApi + ytmusic-player-bar elements don't
+ *      exist until YT's app upgrades. We poll-with-backoff until they
+ *      appear before wiring listeners. Fixes the race that documentStart
+ *      injection always lost.
+ *
+ *   4. Fallback to mediaSession polling — only if playerApi never
+ *      materializes (defensive; YT has changed selector names in the
+ *      past). When fallback fires it's logged so we know.
+ *
+ * The old `__riffPendingNextUrl` + capture-phase ended + timeupdate
+ * EOT-window code is GONE from this rewrite. Commit 2 replaces it
+ * entirely with Redux-store queue dispatch (the real fix).
  */
 
 (function () {
     "use strict";
 
+    // ---- Element finders ---------------------------------------------------
+
     function videoEl() { return document.querySelector("video"); }
 
-    function postEvent(payload) {
-        try {
-            window.webkit.messageHandlers.bridge.postMessage(payload);
-        } catch (_) {}
+    /**
+     * Find YT Music's player API object. Two known seams, in preference order:
+     *   - ytmusic-player element's .playerApi (modern, post-2023 ish)
+     *   - #movie_player element directly (older; some YT Music builds still
+     *     expose it). Both share the same surface: getVideoData(),
+     *     addEventListener('videodatachange'|'onStateChange', fn),
+     *     setVolume(0..100), playVideo(), pauseVideo(), etc.
+     */
+    function playerApi() {
+        const ytp = document.querySelector("ytmusic-player");
+        if (ytp && typeof ytp.playerApi === "object" && ytp.playerApi) {
+            return ytp.playerApi;
+        }
+        const mp = document.getElementById("movie_player");
+        if (mp && typeof mp.getVideoData === "function") {
+            return mp;
+        }
+        return null;
     }
 
+    function playerBar() { return document.querySelector("ytmusic-player-bar"); }
+
+    function postEvent(payload) {
+        try { window.webkit.messageHandlers.bridge.postMessage(payload); } catch (_) {}
+    }
+
+    // ---- Public API (window.musicBridge) -----------------------------------
+
     const api = {
-        // Single navigation primitive: Swift builds the full /watch?v=&list=
-        // URL (after resolving any browseId on the Swift side) and tells the
-        // page to load it. The /watch route auto-plays.
+        // Single navigation primitive — Swift builds the full /watch?v=&list=
+        // URL and tells the page to load it. The /watch route auto-plays.
         navigate(url) { location.href = url; },
-        togglePlay() { const v = videoEl(); if (!v) return; v.paused ? v.play() : v.pause(); },
-        setPlaybackRate(rate) { const v = videoEl(); if (v) v.playbackRate = rate; },
+
+        togglePlay() {
+            const v = videoEl();
+            if (!v) return;
+            v.paused ? v.play() : v.pause();
+        },
+
+        setPlaybackRate(rate) {
+            const v = videoEl();
+            if (v) v.playbackRate = rate;
+        },
+
         skipBy(seconds) {
             const v = videoEl();
             if (v && isFinite(v.duration)) {
                 v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + seconds));
             }
         },
+
         setVolume(level) {
             const v = videoEl();
             if (v) v.volume = Math.max(0, Math.min(1, level));
         },
-        // Repeat-one is implemented natively on the <video> element via
-        // the loop attribute. When loop=true, the browser restarts the
-        // current source at end-of-stream and YT Music's autoplay
-        // never fires — clean per-track repeat with no DOM dependence.
-        // Repeat-off lets the page's natural autoplay continue.
+
+        // Repeat-one via the <video>.loop attribute. When loop=true the
+        // browser restarts the source at end-of-stream and YT Music's
+        // autoplay never fires. Clean per-track repeat with no DOM
+        // dependence.
         setRepeatLoop(enabled) {
             const v = videoEl();
             if (v) v.loop = !!enabled;
         },
-        // Park a URL on the page so that when the current track ends,
-        // the `ended` listener navigates synchronously to it —
-        // beating YT Music's own autoplay handler. The empty string
-        // (or any falsy value) clears it. Set by Swift whenever the
-        // head of upNext is a user-queued track; cleared when the
-        // user-queued track itself starts playing (Swift will push
-        // the next user-queued URL, if any, or clear).
+
+        // ── Stub kept for commit-1 backward compat ──
+        // The old "park a URL on the page to navigate from ended" hack.
+        // Commit 2 replaces this with Redux-store queue dispatch (the
+        // real fix), at which point this becomes a no-op. Kept here so
+        // Swift's existing syncPendingNextURL calls don't crash during
+        // the in-flight refactor.
         setPendingNextURL(url) {
             window.__riffPendingNextUrl = url || null;
         },
-        next()       { document.querySelector(".next-button")?.click(); },
-        previous()   { document.querySelector(".previous-button")?.click(); },
+
+        next()     { document.querySelector(".next-button")?.click(); },
+        previous() { document.querySelector(".previous-button")?.click(); },
+
         seek(fraction) {
             const v = videoEl();
             if (!v || !isFinite(v.duration)) return;
             v.currentTime = Math.max(0, Math.min(v.duration, v.duration * fraction));
         },
+
         getState() {
             const v = videoEl();
             return v ? { paused: v.paused, currentTime: v.currentTime, duration: v.duration } : null;
         },
     };
-
     window.musicBridge = api;
 
-    // Autoplay override — TWO mechanisms because YT Music doesn't
-    // fire the standard <video>.ended event. They advance tracks via
-    // MSE source-swap (Media Source Extensions), which means our
-    // capture-phase ended listener never gets to run.
-    //
-    // (a) Capture-phase ended listener — kept as a fallback for the
-    //     rare case where ended actually does fire (some streaming
-    //     transitions, some podcast contexts).
-    // (b) timeupdate-based end-of-stream detection — the real workhorse.
-    //     timeupdate fires ~4×/sec during playback. When currentTime
-    //     approaches duration we fire the pending navigation ourselves,
-    //     beating YT's MSE source-swap to the punch.
-    window.addEventListener("ended", (e) => {
-        const t = e.target;
-        if (!t || (t.tagName !== "VIDEO" && t.tagName !== "AUDIO")) return;
-        if (!window.__riffPendingNextUrl) return;
-        e.stopImmediatePropagation();
-        const url = window.__riffPendingNextUrl;
-        window.__riffPendingNextUrl = null;
-        try { t.pause(); } catch (_) {}
-        postEvent({ event: "riffNavigatedTo", url: url, via: "ended" });
-        location.href = url;
-    }, true /* capture */);
+    // ---- Track-change + state-change handling ------------------------------
 
-    // (b) timeupdate-based intercept. Triggers when currentTime is
-    // within `EOT_WINDOW` seconds of duration AND a pending URL is
-    // set. Idempotent — once we navigate, the page unloads. A guard
-    // flag prevents double-fires from rapid timeupdate events in
-    // that small window.
-    //
-    // EOT_WINDOW = 0.6s: small enough that we don't pre-empt the
-    // last bit of a song the user wants to hear; large enough that
-    // even at 4Hz timeupdate cadence we catch it before YT advances.
-    const EOT_WINDOW = 0.6;
-    let __riffEotFired = false;
-    window.addEventListener("timeupdate", (e) => {
-        const t = e.target;
-        if (!t || (t.tagName !== "VIDEO" && t.tagName !== "AUDIO")) return;
-        const pending = window.__riffPendingNextUrl;
-        if (!pending) {
-            // Reset the fire flag whenever there's nothing pending —
-            // so the next time a URL is parked, we can fire again.
-            __riffEotFired = false;
-            return;
-        }
-        if (__riffEotFired) return;
-        const dur = t.duration;
-        const cur = t.currentTime;
-        if (!isFinite(dur) || dur <= 0) return;
-        if (cur < dur - EOT_WINDOW) return;
-        // End-of-stream window reached and a URL is parked. Fire.
-        __riffEotFired = true;
-        const url = pending;
-        window.__riffPendingNextUrl = null;
-        try { t.pause(); } catch (_) {}
-        postEvent({ event: "riffNavigatedTo", url: url, via: "timeupdate" });
-        location.href = url;
-    }, true /* capture */);
-
-    // Wire MediaSession + video element events back to Swift.
-    function attachEvents() {
-        const v = videoEl();
-        if (!v || v.__bridgeAttached) return;
-        v.__bridgeAttached = true;
-        v.addEventListener("play",       () => postEvent({ event: "stateChanged", isPlaying: true }));
-        v.addEventListener("pause",      () => postEvent({ event: "stateChanged", isPlaying: false }));
-        v.addEventListener("timeupdate", () => postEvent({ event: "progress", currentTime: v.currentTime, duration: v.duration }));
-        // Target-phase ended listener — fires alongside YT Music's
-        // own listener but in arbitrary order. Used only for the
-        // stateChanged notification + the "ended" event back to
-        // Swift; the navigation override lives in a capture-phase
-        // listener installed on `window` below (which fires BEFORE
-        // any target-phase listener, including YT's).
-        v.addEventListener("ended", () => {
-            postEvent({ event: "ended" });
-            postEvent({ event: "stateChanged", isPlaying: false });
-        });
-    }
-
-    // Watch navigator.mediaSession.metadata + the URL videoId together — that
-    // pair changes whenever the page advances to a new track. Polling is the
-    // most reliable signal; YT Music doesn't fire a public event we can hook.
-    // Track the last-seen playlistId across pollTrack ticks. YT Music's SPA
-    // strips the `list` URL param once a track is playing, but the user
-    // is still inside the playlist context — so we cache the last
-    // non-null value and keep reporting it on subsequent ticks until the
-    // user navigates somewhere that explicitly clears it.
+    let lastVideoId = "";
     let stickyPlaylistId = null;
-    let lastTrackKey = "";
+
     function findPlaylistId() {
-        const url = new URL(location.href);
         // 1. Direct URL param (truthful right after navigation).
+        const url = new URL(location.href);
         let id = url.searchParams.get("list");
         if (id) return id;
-        // 2. Sometimes YT Music keeps it in the hash route.
+        // 2. Hash route — some YT Music transitions keep it there.
         if (location.hash) {
-            const hashUrl = new URL(location.hash.slice(1), location.origin);
-            id = hashUrl.searchParams.get("list");
-            if (id) return id;
+            try {
+                const hashUrl = new URL(location.hash.slice(1), location.origin);
+                id = hashUrl.searchParams.get("list");
+                if (id) return id;
+            } catch (_) { /* malformed; fall through */ }
         }
-        // 3. Look for a queue link in the DOM that includes ?list=.
+        // 3. DOM scan for any list= link.
         const link = document.querySelector('a[href*="list="]');
         if (link) {
             try {
                 const href = new URL(link.href, location.origin);
                 id = href.searchParams.get("list");
                 if (id) return id;
-            } catch (_) { /* ignore malformed */ }
+            } catch (_) {}
         }
         return null;
     }
-    function pollTrack() {
-        const md = navigator.mediaSession && navigator.mediaSession.metadata;
-        const url = new URL(location.href);
-        const videoId = url.searchParams.get("v");
+
+    /**
+     * Fire a `trackChanged` event to Swift.
+     * Pulls metadata from playerApi.getVideoData() — the canonical YT source —
+     * with mediaSession.metadata as a fallback for the artwork (videoData
+     * sometimes omits it).
+     */
+    function emitTrackChanged(reason) {
+        const api = playerApi();
+        if (!api) return;
+        let vd;
+        try { vd = api.getVideoData(); } catch (_) { return; }
+        if (!vd || !vd.video_id) return;
         const found = findPlaylistId();
         if (found) stickyPlaylistId = found;
         const playlistId = stickyPlaylistId;
-        if (!md || !videoId) return;
-        const key = videoId + "|" + (md.title || "") + "|" + (playlistId || "");
-        if (key === lastTrackKey) return;
-        lastTrackKey = key;
-        const artwork = (md.artwork && md.artwork.length > 0) ? md.artwork[md.artwork.length - 1].src : null;
+        if (vd.video_id === lastVideoId && reason !== "force") return;
+        lastVideoId = vd.video_id;
+        // Artwork: mediaSession is more reliable than vd for the high-res
+        // image. We pick the last (largest) entry.
+        let artwork = null;
+        const md = navigator.mediaSession && navigator.mediaSession.metadata;
+        if (md && md.artwork && md.artwork.length > 0) {
+            artwork = md.artwork[md.artwork.length - 1].src;
+        }
         postEvent({
             event: "trackChanged",
-            videoId: videoId,
+            videoId: vd.video_id,
             playlistId: playlistId,
-            title:   md.title  || "",
-            artist:  md.artist || "",
+            title: vd.title || (md && md.title) || "",
+            artist: vd.author || (md && md.artist) || "",
             artwork: artwork,
         });
     }
-    setInterval(pollTrack, 500);
 
-    // Re-attach as the page reorders the DOM.
-    new MutationObserver(attachEvents).observe(document.documentElement, { childList: true, subtree: true });
-    document.addEventListener("DOMContentLoaded", () => {
-        attachEvents();
+    function emitState(state) {
+        // YT's IFrame Player API state codes (the same set ytmusic-player.playerApi uses):
+        //  -1 unstarted, 0 ENDED, 1 PLAYING, 2 PAUSED, 3 BUFFERING, 5 CUED
+        if (state === 1) {
+            postEvent({ event: "stateChanged", isPlaying: true });
+        } else if (state === 0 || state === 2) {
+            postEvent({ event: "stateChanged", isPlaying: false });
+        }
+        if (state === 0) {
+            postEvent({ event: "ended" });
+            // Legacy: drain __riffPendingNextUrl if set. Commit 2 removes
+            // the Swift-side push that fills it, at which point this branch
+            // becomes dead code.
+            const pending = window.__riffPendingNextUrl;
+            if (pending) {
+                window.__riffPendingNextUrl = null;
+                postEvent({ event: "riffNavigatedTo", url: pending, via: "onStateChange" });
+                location.href = pending;
+            }
+        }
+    }
+
+    /**
+     * Subscribe to playerApi event bus. The event names differ slightly
+     * across YT builds — `videodatachange` is the canonical track-change
+     * event in modern builds; `onStateChange` is universal.
+     *
+     * On `videodatachange` we get (name, videoData) where `name` ∈
+     * {'newdata', 'dataloaded', 'dataupdated'}. We treat any non-empty
+     * videoData with a new video_id as a track change.
+     */
+    function subscribeToPlayerApi(api) {
+        if (api.__riffSubscribed) return;
+        api.__riffSubscribed = true;
+        try {
+            api.addEventListener("videodatachange", (_name, _videoData) => {
+                emitTrackChanged("videodatachange");
+            });
+        } catch (e) { postEvent({ event: "diagnostic", msg: "videodatachange subscribe failed: " + e }); }
+        try {
+            api.addEventListener("onStateChange", (state) => {
+                emitState(state);
+            });
+        } catch (e) { postEvent({ event: "diagnostic", msg: "onStateChange subscribe failed: " + e }); }
+        // Initial sync — emit what's currently loaded so Swift gets a track
+        // immediately on (re)attach instead of waiting for the first
+        // playerApi event.
+        emitTrackChanged("force");
+    }
+
+    // ---- <video> listeners (progress only — state moved to onStateChange) --
+
+    function attachVideoListeners() {
+        const v = videoEl();
+        if (!v || v.__riffAttached) return;
+        v.__riffAttached = true;
+        // Progress is fine to read directly off the element — it fires
+        // ~4Hz and we use it for the scrubber, not for end-of-track
+        // decisions.
+        v.addEventListener("timeupdate", () => {
+            postEvent({ event: "progress", currentTime: v.currentTime, duration: v.duration });
+        });
+    }
+
+    // ---- Setup gate: poll until playerApi + player-bar exist ---------------
+
+    let setupAttempts = 0;
+    const SETUP_MAX_ATTEMPTS = 60;       // 30s at 500ms cadence
+    const SETUP_INTERVAL_MS = 500;
+    let setupDone = false;
+
+    function setup() {
+        if (setupDone) return;
+        const api = playerApi();
+        const bar = playerBar();
+        if (!api || !bar) {
+            setupAttempts++;
+            if (setupAttempts > SETUP_MAX_ATTEMPTS) {
+                // Defensive: if playerApi never appears (YT changed selectors,
+                // page broken, etc.) fall back to the legacy mediaSession poll
+                // so Riff doesn't silently lose track-change events. The
+                // fallback's lower fidelity is acceptable; the alert tells us
+                // the primary path is dead.
+                postEvent({ event: "diagnostic", msg: "playerApi never appeared after " + SETUP_MAX_ATTEMPTS + " attempts; falling back to mediaSession poll" });
+                startMediaSessionFallback();
+                setupDone = true;
+                postEvent({ event: "ready" });
+                return;
+            }
+            setTimeout(setup, SETUP_INTERVAL_MS);
+            return;
+        }
+        setupDone = true;
+        subscribeToPlayerApi(api);
+        attachVideoListeners();
+        // Re-attach video listeners as YT swaps the element (rare but happens
+        // across some SPA transitions). MutationObserver watching the body's
+        // childList is overkill for this; the videodatachange event will
+        // already fire on the new element, and we just need to grab the
+        // new element's timeupdate.
+        new MutationObserver(() => {
+            attachVideoListeners();
+            // Also rebind playerApi listeners if the playerApi instance
+            // changed (defensive — YT sometimes recreates the player on
+            // certain navigations).
+            const fresh = playerApi();
+            if (fresh && !fresh.__riffSubscribed) {
+                subscribeToPlayerApi(fresh);
+            }
+        }).observe(document.documentElement, { childList: true, subtree: true });
         postEvent({ event: "ready" });
-    });
+    }
+
+    // ---- Fallback: legacy mediaSession + URL polling -----------------------
+    //
+    // Only used when the playerApi seam never materializes. Lower fidelity
+    // but better than nothing.
+
+    let fallbackTimerId = null;
+    function startMediaSessionFallback() {
+        if (fallbackTimerId) return;
+        let fallbackKey = "";
+        fallbackTimerId = setInterval(() => {
+            const md = navigator.mediaSession && navigator.mediaSession.metadata;
+            const url = new URL(location.href);
+            const videoId = url.searchParams.get("v");
+            if (!md || !videoId) return;
+            const found = findPlaylistId();
+            if (found) stickyPlaylistId = found;
+            const key = videoId + "|" + (md.title || "") + "|" + (stickyPlaylistId || "");
+            if (key === fallbackKey) return;
+            fallbackKey = key;
+            const artwork = (md.artwork && md.artwork.length > 0) ? md.artwork[md.artwork.length - 1].src : null;
+            postEvent({
+                event: "trackChanged",
+                videoId: videoId,
+                playlistId: stickyPlaylistId,
+                title: md.title || "",
+                artist: md.artist || "",
+                artwork: artwork,
+            });
+        }, 500);
+        // Also attach the <video> ended listener as best-effort EOT signal in
+        // fallback mode (in case YT does fire it on some non-MSE contexts
+        // like ads).
+        const v = videoEl();
+        if (v && !v.__riffFallbackAttached) {
+            v.__riffFallbackAttached = true;
+            v.addEventListener("ended", () => {
+                postEvent({ event: "ended" });
+                postEvent({ event: "stateChanged", isPlaying: false });
+            });
+        }
+    }
+
+    // ---- Kick off ---------------------------------------------------------
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", setup);
+    } else {
+        setup();
+    }
 })();

@@ -105,14 +105,20 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
             return .ended
         case "riffNavigatedTo":
             // Bookkeeping-only event so Swift can log JS-driven nav.
-            // `via` tells us which mechanism fired: "ended" (standard
-            // event) or "timeupdate" (our EOT-window detector, used
-            // because YT Music advances via MSE source-swap without
-            // firing ended). Returning nil makes the dispatcher
-            // drop the payload — we just want the log trail.
+            // Commit-1 keeps this hooked while __riffPendingNextUrl
+            // is still in transition; commit 2 drops the push side and
+            // this case becomes dead code (no harm leaving the handler).
             if let url = body["url"] as? String {
                 let via = (body["via"] as? String) ?? "?"
                 Log.bridge.debug("JS navigated to (autoplay-intercept, via=\(via, privacy: .public)): \(url, privacy: .public)")
+            }
+            return nil
+        case "diagnostic":
+            // JS-side warnings (playerApi setup failures, missing
+            // selectors, etc.). Surface to the unified log so the
+            // primary-vs-fallback path is observable from `log show`.
+            if let msg = body["msg"] as? String {
+                Log.bridge.error("JS diagnostic: \(msg, privacy: .public)")
             }
             return nil
         default:
