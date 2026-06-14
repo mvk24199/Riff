@@ -59,8 +59,15 @@ status: executing        # draft → approved → executing → done
       files: PlayerBridge.swift, NowPlayingView.swift, Tests/QueueAndResolverTests.swift
 - [ ] **10. Share URL + Lyric image cards**
       files: PlayerBridge.swift, TrackContextMenu.swift, new Sources/UI/LyricCardSheet.swift
-- [ ] **11. Phase 3 — App Intents (Spotlight + Siri + Shortcuts)**
-      files: new Sources/Intents/RiffIntents.swift, project.yml
+- [x] **11. Phase 3 — App Intents (Spotlight + Siri + Shortcuts)**
+      files: new Sources/Intents/RiffIntents.swift, project.yml, AppEnvironment.swift
+      note: ships 5 intents — PlayTrack / PlayArtistRadio / Resume / Pause /
+            SkipNext — plus a `RiffAppShortcuts` provider with 15 phrases.
+            Intents reach the live PlayerBridge via a process-wide
+            `AppEnvironment.current` weak ref (RiffApp owns the single
+            instance; the weak ref tracks it without risking duplicate
+            WKWebViews). NSSiriUsageDescription added to Info.plist for
+            voice-invocation path.
 - [ ] **12. Phase 3 — BYO-LLM (Anthropic + queue builder)**
       files: new Sources/AI/LLMProvider.swift, AnthropicProvider.swift,
              SettingsView.swift, new Sources/UI/Player/QueueBuilderSheet.swift
