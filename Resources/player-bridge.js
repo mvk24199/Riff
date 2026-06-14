@@ -73,6 +73,35 @@
 
     window.musicBridge = api;
 
+    // Capture-phase autoplay override. The DOM event model runs capture
+    // listeners (top → target) BEFORE target-phase listeners. YT Music
+    // attached its target-phase ended listener when its app initialized;
+    // installing ours here in capture phase on `window` guarantees we
+    // run first. If a user-queued URL is pending we consume it, stop
+    // propagation so YT's listener never fires, and navigate ourselves.
+    //
+    // Done at documentStart (this IIFE runs before YT's app boot) so
+    // the listener is in place before any <video> exists. Listening on
+    // `window` because the actual <video> element is created later by
+    // YT's app code; capture phase walks from window → document → ...
+    // → video, so we catch ended at the topmost capture point.
+    window.addEventListener("ended", (e) => {
+        const t = e.target;
+        if (!t || (t.tagName !== "VIDEO" && t.tagName !== "AUDIO")) return;
+        const pending = window.__riffPendingNextUrl;
+        if (!pending) return;
+        // Stop YT Music's target-phase ended handler from running so
+        // it can't trigger its own autoplay before we navigate.
+        e.stopImmediatePropagation();
+        window.__riffPendingNextUrl = null;
+        // Pause to make sure the page doesn't keep playing the just-
+        // ended media into the navigation window. location.href will
+        // unload the page anyway, but the pause is belt-and-braces.
+        try { t.pause(); } catch (_) {}
+        postEvent({ event: "riffNavigatedTo", url: pending });
+        location.href = pending;
+    }, true /* capture */);
+
     // Wire MediaSession + video element events back to Swift.
     function attachEvents() {
         const v = videoEl();
@@ -81,26 +110,15 @@
         v.addEventListener("play",       () => postEvent({ event: "stateChanged", isPlaying: true }));
         v.addEventListener("pause",      () => postEvent({ event: "stateChanged", isPlaying: false }));
         v.addEventListener("timeupdate", () => postEvent({ event: "progress", currentTime: v.currentTime, duration: v.duration }));
-        // Track-ended needs its own channel + a synchronous in-page
-        // navigation override. Both YT Music's autoplay handler AND
-        // ours fire on the same video.ended. If we round-trip
-        // through Swift first, YT's handler wins the race and
-        // advances to a radio suggestion before our navigate
-        // arrives. Solution: Swift pre-pushes the URL for the
-        // user-queued track into window.__riffPendingNextUrl, and
-        // this listener consumes it synchronously — the navigate
-        // happens in the same microtask as YT's own handler so we
-        // tie or win.
+        // Target-phase ended listener — fires alongside YT Music's
+        // own listener but in arbitrary order. Used only for the
+        // stateChanged notification + the "ended" event back to
+        // Swift; the navigation override lives in a capture-phase
+        // listener installed on `window` below (which fires BEFORE
+        // any target-phase listener, including YT's).
         v.addEventListener("ended", () => {
             postEvent({ event: "ended" });
             postEvent({ event: "stateChanged", isPlaying: false });
-            const pending = window.__riffPendingNextUrl;
-            if (pending) {
-                // Clear before navigating so a fast reload of this
-                // page doesn't re-consume the same URL.
-                window.__riffPendingNextUrl = null;
-                location.href = pending;
-            }
         });
     }
 

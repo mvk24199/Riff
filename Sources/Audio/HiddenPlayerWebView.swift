@@ -103,6 +103,16 @@ final class HiddenPlayerWebView: NSObject, WKScriptMessageHandler, WKNavigationD
             return .trackChanged(videoId: videoId, playlistId: playlistId, title: title, artist: artist, artwork: artwork)
         case "ended":
             return .ended
+        case "riffNavigatedTo":
+            // Bookkeeping-only event so Swift can log JS-driven nav.
+            // Returning nil makes the dispatcher drop it (no payload
+            // change), and we surface the raw string via Log so the
+            // diagnostic trail shows up in `log show` next to the
+            // syncPendingNextURL push.
+            if let url = body["url"] as? String {
+                Log.bridge.debug("JS navigated to (autoplay-intercept): \(url, privacy: .public)")
+            }
+            return nil
         default:
             return nil
         }
