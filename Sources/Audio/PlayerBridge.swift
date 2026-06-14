@@ -297,7 +297,19 @@ final class PlayerBridge {
         // proper YT-Music-style radio queue instead of just the current
         // track. play(videoId:) below sets currentPlaylistId; we mirror it
         // here so the queue refresh has the right context immediately.
-        queue.clearQueue()
+        //
+        // BUG-1 fix: a wholesale `queue.clearQueue()` here would drop
+        // any user-queued items (Play next / Add to queue) the user
+        // had pending against the *previous* track. Filter the clear
+        // so user-tagged items survive into refreshNextQueueAndIds,
+        // where they get merged into the head of the fresh /next
+        // response. The just-promoted track itself is excluded — it
+        // already became currentTrack, no need to leave a duplicate
+        // in upNext.
+        let preservedUserQueued = upNext.filter { entry in
+            userQueuedIds.contains(entry.id) && entry.id != item.id
+        }
+        queue.replaceQueue(preservedUserQueued)
         related = []
         lyrics = nil
         // Tune chips are per-watch-context. Clear them so the popover
@@ -398,13 +410,30 @@ final class PlayerBridge {
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
+                // BUG-1 fix: preserve any user-queued tracks across
+                // the wholesale replace. Items the user explicitly
+                // added via "Play next" / "Add to queue" (tagged in
+                // userQueuedIds) get spliced into the head of the
+                // new server queue, so a routine /next refresh from
+                // autoplay doesn't drop them. Order among preserved
+                // items is the order they currently appear in upNext
+                // — which matches the order the user added them
+                // (playNext inserts at head, addToEnd appends).
+                let curId = self.currentTrack?.videoId
+                let preserved = self.upNext.filter { item in
+                    self.userQueuedIds.contains(item.id) && item.id != curId
+                }
+                let preservedIds = Set(preserved.map(\.id))
+                // De-dupe: if /next happened to surface a track we're
+                // about to splice back, take our copy (preserves the
+                // user-queued tag) and drop the server's duplicate.
+                let merged = preserved + fetched.filter { !preservedIds.contains($0.id) }
                 // Drop blocked-artist tracks before they reach the
                 // UI. The currentTrack itself is never filtered —
                 // the user is already listening to it; pulling it
                 // out of upNext just causes the "what's playing"
                 // strip to misalign.
-                let curId = self.currentTrack?.videoId
-                let visible = fetched.filter { item in
+                let visible = merged.filter { item in
                     item.id == curId || !self.shouldBlock(item)
                 }
                 self.queue.replaceQueue(visible)
@@ -462,8 +491,18 @@ final class PlayerBridge {
             Log.bridge.debug("applyChip \(chip.id, privacy: .public) → queue=\(response.queue.count)")
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
+                // Tune-chip selection reshapes the radio recommendations
+                // but user intent on "Play next" / "Add to queue" still
+                // overrides — same preservation logic as
+                // refreshNextQueueAndIds. The user explicitly said
+                // "play X next"; switching chips shouldn't drop X.
                 let curId = self.currentTrack?.videoId
-                let visible = response.queue.filter { item in
+                let preserved = self.upNext.filter { item in
+                    self.userQueuedIds.contains(item.id) && item.id != curId
+                }
+                let preservedIds = Set(preserved.map(\.id))
+                let merged = preserved + response.queue.filter { !preservedIds.contains($0.id) }
+                let visible = merged.filter { item in
                     item.id == curId || !self.shouldBlock(item)
                 }
                 self.queue.replaceQueue(visible)
