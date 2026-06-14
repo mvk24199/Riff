@@ -56,6 +56,44 @@ status: executing        # draft → approved → executing → done
       files: new Sources/AI/LLMProvider.swift, AnthropicProvider.swift,
              SettingsView.swift, new Sources/UI/Player/QueueBuilderSheet.swift
 
+## Bug backlog (track + revisit between feature steps)
+
+These are user-reported defects, not new features. They jump priority
+over later Tier 3+ items but slot below in-progress Tier 2 work.
+
+- [ ] **BUG-1. Up Next refreshes wholesale on every track change, losing
+      user intent.**
+      Symptom: as each new track plays, the Up Next pane gets replaced
+      with the new /next response. Items the user reordered, queued
+      ("Play next" / "Add to queue"), or were just visually relying on
+      stay-put disappear.
+      Root cause: `PlayerBridge.refreshNextQueueAndIds` does
+      `queue.replaceQueue(fetched)` on every trackChanged event. The
+      server queue and our local queue diverge when the user has
+      mutated locally, and the server view wins.
+      Fix sketch: when replacing, preserve any item whose id is in
+      `userQueuedIds` (or otherwise locally-modified) by splicing
+      them back into the head of `fetched` after the de-dupe. Also
+      consider only replacing when the previously-shown queue was
+      empty OR when the new response is a fresh chip selection —
+      otherwise prepend new items rather than wholesale-replace.
+      Risk: if the server queue genuinely advanced (autoplay went to
+      the next track and we missed it), naive prepending could show
+      a stale tail. Test path: start radio, click "Play next" on a
+      song, let current track end, verify the user's song plays.
+
+- [ ] **BUG-2. "Play next" lands a track in Up Next but a different
+      one plays.**
+      Symptom: clicking "Play next" inserts the song at the top of
+      Up Next, but when the current track ends YT autoplays a
+      different one. (Originally fixed in `93a9977` via video.ended
+      interception + userQueuedIds.)
+      Status: regressed by BUG-1 — when /next replaces upNext,
+      the user-queued item is no longer in the array, so
+      `advanceToUserQueuedIfAny()` can't find it.
+      Likely fixed when BUG-1 fix lands. Verify by reproducing the
+      original repro after BUG-1 ships.
+
 ## Out of scope
 
 - Sound Search (hum-to-find)
