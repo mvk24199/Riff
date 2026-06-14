@@ -185,68 +185,14 @@ struct DetailView: View {
                     artistId: track.artistId,
                     setVideoId: track.setVideoId
                 )
-                Button {
-                    Task { await env.player.play(item: resolved) }
-                } label: {
-                    HStack(spacing: 14) {
-                        Text("\(index + 1)")
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.45))
-                            .frame(width: 28, alignment: .trailing)
-                        AsyncImage(url: track.thumbnailURL ?? fallbackArtwork) { phase in
-                            if case .success(let img) = phase {
-                                img.resizable().aspectRatio(contentMode: .fill)
-                            } else {
-                                Color.white.opacity(0.06)
-                            }
-                        }
-                        .frame(width: 44, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(track.title)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                            Text(track.subtitle)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.white.opacity(0.55))
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        // Per-track duration — shown when the parser
-                        // captured it. Albums almost always provide
-                        // it; some "Songs" search shelves omit it.
-                        if let secs = track.durationSeconds {
-                            Text(formatTrackDuration(secs))
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.55))
-                                .padding(.trailing, 8)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 32)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background(
-                    Color.white.opacity(0).onHover { hovering in
-                        // Hover background handled by the hidden modifier below.
-                        _ = hovering
-                    }
+                TrackRow(
+                    index: index,
+                    item: resolved,
+                    isUserOwnedPlaylist: isUserOwnedPlaylist,
+                    onRemoveFromPlaylist: isUserOwnedPlaylist
+                        ? { setId in await removeFromCurrentPlaylist(track: resolved, setVideoId: setId) }
+                        : nil
                 )
-                .contextMenu {
-                    TrackContextMenu(item: resolved)
-                    // "Remove from this playlist" — only meaningful
-                    // when the open detail page is a user-owned
-                    // playlist AND the row carries a setVideoId
-                    // (parsed by parseListItem from playlistItemData).
-                    if isUserOwnedPlaylist, let setId = resolved.setVideoId {
-                        Divider()
-                        Button("Remove from this playlist") {
-                            Task { await removeFromCurrentPlaylist(track: resolved, setVideoId: setId) }
-                        }
-                    }
-                }
             }
         }
     }
@@ -353,19 +299,6 @@ struct DetailView: View {
         let h = totalMinutes / 60
         let m = totalMinutes % 60
         return m == 0 ? "\(h) hr" : "\(h) hr \(m) min"
-    }
-
-    /// Per-row duration formatter — matches the search-result-row
-    /// convention. Local to DetailView so we don't bind to a UI
-    /// helper from a different module.
-    private func formatTrackDuration(_ totalSeconds: Int) -> String {
-        let h = totalSeconds / 3600
-        let m = (totalSeconds % 3600) / 60
-        let s = totalSeconds % 60
-        if h > 0 {
-            return String(format: "%d:%02d:%02d", h, m, s)
-        }
-        return String(format: "%d:%02d", m, s)
     }
 
     private var kindLabel: String {
@@ -475,5 +408,141 @@ struct DetailView: View {
             albumId: track.albumId,
             artistId: track.artistId
         )
+    }
+}
+
+// MARK: - TrackRow
+
+/// One row in an album / playlist tracklist. Extracted as its own
+/// view so each row can carry independent hover state without
+/// `@State` arrays in the parent. Affordances:
+///
+///   - Leading column: track number → play arrow on hover → equalizer
+///     icon when this row is the currently-playing track.
+///   - Title turns red and gains weight when this row is playing,
+///     mirroring YT Music's tracklist.
+///   - Row background lights up on hover.
+///   - Right-click reveals the standard TrackContextMenu plus
+///     "Remove from this playlist" when the parent page is
+///     user-owned and we have a setVideoId.
+///   - Duration on the right is always visible when present.
+private struct TrackRow: View {
+    @Environment(AppEnvironment.self) private var env
+    let index: Int
+    let item: MediaItem
+    let isUserOwnedPlaylist: Bool
+    /// Callback for "Remove from this playlist" — when nil the menu
+    /// entry is hidden. Provided by DetailView with the right
+    /// closure context (it needs `self.item` for the playlistId).
+    let onRemoveFromPlaylist: ((String) async -> Void)?
+
+    @State private var hovering = false
+
+    private var isCurrent: Bool {
+        env.player.currentTrack?.videoId == item.id
+    }
+
+    var body: some View {
+        Button {
+            Task { await env.player.play(item: item) }
+        } label: {
+            HStack(spacing: 14) {
+                leadingColumn
+                AsyncImage(url: item.thumbnailURL) { phase in
+                    if case .success(let img) = phase {
+                        img.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color.white.opacity(0.06)
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title)
+                        .font(.system(size: 14, weight: isCurrent ? .semibold : .medium))
+                        .foregroundStyle(isCurrent ? Theme.red : .white)
+                        .lineLimit(1)
+                    Text(item.subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(isCurrent ? 0.75 : 0.55))
+                        .lineLimit(1)
+                }
+                Spacer()
+                if let secs = item.durationSeconds {
+                    Text(formatRowDuration(secs))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(isCurrent ? 0.8 : 0.55))
+                        .padding(.trailing, 8)
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            // Hover highlight + a subtle persistent tint for the
+            // currently-playing row so users can find it in long
+            // tracklists without having to scroll-hunt.
+            Group {
+                if isCurrent {
+                    Theme.red.opacity(0.08)
+                } else if hovering {
+                    Color.white.opacity(0.05)
+                } else {
+                    Color.clear
+                }
+            }
+        )
+        .onHover { hovering = $0 }
+        .contextMenu {
+            TrackContextMenu(item: item)
+            if isUserOwnedPlaylist, let setId = item.setVideoId, let onRemove = onRemoveFromPlaylist {
+                Divider()
+                Button("Remove from this playlist") {
+                    Task { await onRemove(setId) }
+                }
+            }
+        }
+    }
+
+    /// Leading column. Width is fixed so titles align across rows
+    /// even when the leading content swaps (number ↔ arrow ↔ icon).
+    @ViewBuilder
+    private var leadingColumn: some View {
+        ZStack {
+            // Track number — visible by default; hidden when the row
+            // is hovered (replaced by play arrow) or currently
+            // playing (replaced by equalizer icon).
+            Text("\(index + 1)")
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.45))
+                .opacity(hovering || isCurrent ? 0 : 1)
+            // Currently-playing equalizer indicator. YT Music has an
+            // animated wave here; `speaker.wave.2.fill` is the
+            // closest SF Symbol and matches the icon we already use
+            // in the NowPlayingView queue rows.
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.red)
+                .opacity(isCurrent ? 1 : 0)
+            // Hover play arrow — only shows when hovering AND this
+            // row isn't already the current track.
+            Image(systemName: "play.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .opacity(hovering && !isCurrent ? 1 : 0)
+        }
+        .frame(width: 28, alignment: .center)
+    }
+
+    private func formatRowDuration(_ totalSeconds: Int) -> String {
+        let h = totalSeconds / 3600
+        let m = (totalSeconds % 3600) / 60
+        let s = totalSeconds % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
     }
 }
