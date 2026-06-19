@@ -485,6 +485,11 @@ struct NowPlayingView: View {
     // MARK: - Tab content
 
     @State private var tunePopoverOpen: Bool = false
+    /// "Recently played" only shows the most-recent few rows by default;
+    /// scrolling back through every track played in the session was making
+    /// the Up Next pane feel like a log file. Flips to true on "Show more".
+    @State private var historyExpanded: Bool = false
+    private static let historyDefaultLimit: Int = 3
 
     private var upNextContent: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -589,13 +594,42 @@ struct NowPlayingView: View {
                     // (Related / "All") lens — it's a chronological log
                     // of THIS session, not part of a tuned variant's
                     // curation.
-                    Text("Recently played")
-                        .font(.system(size: 10, weight: .semibold))
-                        .textCase(.uppercase)
-                        .tracking(1.2)
-                        .foregroundStyle(.white.opacity(0.45))
-                        .padding(.horizontal, 4)
-                    queueList(history, faded: true)
+                    //
+                    // We cap the visible rows at `historyDefaultLimit`
+                    // (currently 3) to keep the Up Next pane focused
+                    // on what's coming next rather than dominating the
+                    // viewport with session history. The cap shows the
+                    // tail (most-recent N), since that's the part the
+                    // user actually needs as quick rewind context. A
+                    // "Show all / Show fewer" button reveals the full
+                    // log on demand.
+                    HStack(spacing: 6) {
+                        Text("Recently played")
+                            .font(.system(size: 10, weight: .semibold))
+                            .textCase(.uppercase)
+                            .tracking(1.2)
+                            .foregroundStyle(.white.opacity(0.45))
+                        Spacer()
+                        if history.count > Self.historyDefaultLimit {
+                            Button {
+                                historyExpanded.toggle()
+                            } label: {
+                                Text(historyExpanded
+                                     ? "Show fewer"
+                                     : "Show all (\(history.count))")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .textCase(.uppercase)
+                                    .tracking(1.2)
+                                    .foregroundStyle(.white.opacity(0.55))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    let visibleHistory: [MediaItem] = historyExpanded
+                        ? history
+                        : Array(history.suffix(Self.historyDefaultLimit))
+                    queueList(visibleHistory, faded: true)
                     Divider().background(Color.white.opacity(0.08))
                         .padding(.vertical, 4)
                 }
