@@ -44,14 +44,13 @@ struct PlayTrackIntent: AppIntent {
     // Bring Riff to the foreground when invoked from Spotlight / Siri.
     static let openAppWhenRun: Bool = true
 
-    // NOTE: the `requestValueDialog:` overload of @Parameter only
-    // accepts AppEntity / AppEnum types, not String. Siri still
-    // prompts for a missing value using the parameter title +
-    // description, so the dialog-less init is fine here.
-    @Parameter(
-        title: "Song",
-        description: "Title or 'title artist' — same string you'd type into Search."
-    )
+    // @Parameter overload-matching is fragile — combining `title:` +
+    // `description:` for a plain String binds the AppEntity/AppEnum
+    // overload (which requires entity types). The minimal `title:`-only
+    // form binds the String overload. The user-facing description was
+    // never user-visible in Spotlight anyway — it surfaces in the
+    // Shortcuts editor only.
+    @Parameter(title: "Song")
     var query: String
 
     static var parameterSummary: some ParameterSummary {
@@ -86,10 +85,7 @@ struct PlayArtistRadioIntent: AppIntent {
     )
     static let openAppWhenRun: Bool = true
 
-    @Parameter(
-        title: "Artist",
-        description: "Artist name to seed a radio station."
-    )
+    @Parameter(title: "Artist")
     var artist: String
 
     static var parameterSummary: some ParameterSummary {
