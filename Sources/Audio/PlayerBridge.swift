@@ -294,7 +294,17 @@ final class PlayerBridge {
     /// before the WebView even starts loading. Without this, anonymous YT
     /// Music plays 2-3 video ads first and the mini-bar flickers through
     /// each ad's metadata before settling on the real song.
-    func play(item: MediaItem) async {
+    /// Play `item` as the new current track.
+    ///
+    /// - parameter clearQueue: when `true` (default — for all the
+    ///   "external entry point" call sites like clicking a song row),
+    ///   resets upNext to just the preserved user-queued items so the
+    ///   refresh can populate a fresh radio around `item`. When
+    ///   `false`, the visible upNext is left intact (the just-played
+    ///   track will fall off via refreshNextQueueAndIds' "surviving"
+    ///   filter). Used by skip-from-queue / autoplay-from-queue paths
+    ///   where the user expects the existing list to stay stable.
+    func play(item: MediaItem, clearQueue: Bool = true) async {
         currentTrack = Track(
             videoId: item.id,
             title: item.title,
@@ -321,10 +331,22 @@ final class PlayerBridge {
         // response. The just-promoted track itself is excluded — it
         // already became currentTrack, no need to leave a duplicate
         // in upNext.
-        let preservedUserQueued = upNext.filter { entry in
-            userQueuedIds.contains(entry.id) && entry.id != item.id
+        //
+        // When clearQueue=false (skip-from-queue / autoplay-of-head),
+        // we skip the queue reset entirely — refreshNextQueueAndIds'
+        // own "surviving" filter pops the just-played head and the
+        // tail-extension logic keeps the rest stable.
+        if clearQueue {
+            let preservedUserQueued = upNext.filter { entry in
+                userQueuedIds.contains(entry.id) && entry.id != item.id
+            }
+            queue.replaceQueue(preservedUserQueued)
+            // Tune chips are per-watch-context. Clear them so the popover
+            // doesn't briefly show the previous track's chips while the new
+            // /next is in flight.
+            availableChips = []
+            selectedChipId = nil
         }
-        queue.replaceQueue(preservedUserQueued)
         related = []
         lyrics = nil
         // Tune chips are per-watch-context. Clear them so the popover
@@ -752,8 +774,17 @@ final class PlayerBridge {
         // internal queue, which diverges from our shown upNext after
         // any /next refresh, block-filter, or chip-mode change. The
         // visible head is the user's mental model of "next song".
+        //
+        // clearQueue:false so the rest of the visible list stays
+        // stable — the head pops via refreshNextQueueAndIds' own
+        // "surviving" filter and the tail extends with fresh /next
+        // suggestions. Without this flag, play(item:) would reset
+        // upNext to (typically empty) preserved user-queued items
+        // and the fresh /next around the new track would rebuild
+        // the list wholesale — visible churn the user complained
+        // about.
         if let head = upNext.first(where: { $0.id != currentId }) {
-            await play(item: head)
+            await play(item: head, clearQueue: false)
             return
         }
         // Priority 4: nothing visible to play — fall back to YT's
