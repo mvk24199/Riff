@@ -9,6 +9,12 @@ struct SearchView: View {
     @State private var results: [MediaItem] = []
     @State private var searching: Bool = false
     @State private var errorMessage: String?
+    /// Sort order applied on top of the network results, scoped per
+    /// active filter. Hydrated from UserDefaults by `TrackSortMenu`
+    /// under `search.sort.{filter}` so the user's "I always sort
+    /// songs by play count" preference sticks across sessions, while
+    /// "sort albums A-Z" doesn't bleed into the songs view.
+    @State private var sort: LibrarySorting.TrackSortOrder = .original
 
     enum SearchFilter: String, CaseIterable, Identifiable {
         case all = "All", songs = "Songs", albums = "Albums", playlists = "Playlists", artists = "Artists", podcasts = "Podcasts"
@@ -83,17 +89,55 @@ struct SearchView: View {
     }
 
     /// Apply the year + duration filters on top of the network
-    /// results. Network response is cached in `results`; this gets
-    /// re-evaluated on every filter change without a refetch.
+    /// results, then the active sort. Network response is cached in
+    /// `results`; this gets re-evaluated on every filter/sort change
+    /// without a refetch.
     private var displayedResults: [MediaItem] {
-        results.filter { item in
+        let filtered = results.filter { item in
             yearFilter.matches(item.year) && durationFilter.matches(item.kind, item.durationSeconds)
         }
+        // Under .all the result set is heterogeneous (mixed kinds), so
+        // a "duration" or "play count" sort would compare apples to
+        // oranges (an album row has no duration). Skip sorting entirely
+        // for .all and preserve YT's relevance order.
+        guard filter != .all else { return filtered }
+        return LibrarySorting.sortTracks(filtered, by: sort, entries: env.player.playedEntries)
     }
 
     /// True when at least one refinement is active.
     private var isFiltering: Bool {
         yearFilter != .any || durationFilter != .any
+    }
+
+    /// Whether the sort menu should appear for the current filter.
+    /// Hidden under `.all` (heterogeneous results — sort math doesn't
+    /// apply uniformly) and when the result set is empty (no rows to
+    /// sort). Shown for every kind-specific filter otherwise.
+    private var showsSortMenu: Bool {
+        filter != .all && !results.isEmpty
+    }
+
+    /// Per-filter UserDefaults key for the sort selection. Scoped so
+    /// "Most played" on songs doesn't carry over to a hypothetical
+    /// "Most played" on albums where it has a different meaning.
+    private var sortPersistenceKey: String {
+        "search.sort.\(filter.rawValue)"
+    }
+
+    /// Trim the sort options to the ones that make sense for the
+    /// active filter. Songs / podcasts surface every order; albums /
+    /// playlists / artists drop the duration sorts (album-row
+    /// "duration" isn't surfaced in the search response) and the
+    /// play-history sorts (we don't journal album-tile plays).
+    private var availableSortOrders: [LibrarySorting.TrackSortOrder] {
+        switch filter {
+        case .songs, .podcasts:
+            return LibrarySorting.TrackSortOrder.allCases
+        case .albums, .playlists, .artists:
+            return [.original, .aToZ, .zToA]
+        case .all:
+            return [.original]  // not actually shown; menu is hidden
+        }
     }
 
     var body: some View {
@@ -169,6 +213,23 @@ struct SearchView: View {
                     }
                     .padding(.horizontal, 24)
                 }
+
+                // Sort row — shown for every kind-specific filter
+                // (songs / albums / playlists / artists / podcasts).
+                // The menu picks its own persistence key from `filter`
+                // so each filter remembers its own sort independently.
+                if showsSortMenu {
+                    HStack {
+                        Spacer()
+                        TrackSortMenu(
+                            selection: $sort,
+                            surface: .search,
+                            persistenceKey: sortPersistenceKey,
+                            orders: availableSortOrders
+                        )
+                    }
+                    .padding(.horizontal, 24)
+                }
             }
 
             ScrollView {
@@ -226,6 +287,18 @@ struct SearchView: View {
         // cancels the previous in-flight search when inputs change.
         .task(id: SearchInput(query: query, filter: filter)) {
             await debouncedRunSearch()
+        }
+        // When the filter changes, reset the sort if the previously-
+        // selected order isn't offered by the new filter (e.g. user
+        // had "Longest first" on Songs, then flips to Albums where
+        // duration sort isn't surfaced). The menu's own `.task(id:)`
+        // re-hydrates from the new `search.sort.{filter}` key right
+        // after, so a previously-remembered choice on the new filter
+        // is restored.
+        .onChange(of: filter) { _, _ in
+            if !availableSortOrders.contains(sort) {
+                sort = .original
+            }
         }
         .navigationDestination(for: MediaItem.self) { DetailView(item: $0) }
     }
