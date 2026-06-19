@@ -27,6 +27,13 @@ final class PlayerBridge {
     var playedHistory: [MediaItem] { queue.playedHistory }
 
     private(set) var related: [MediaItem] = []
+    /// Titled shelves YT shipped on the Related tab — "Other versions"
+    /// (live / acoustic / cover variants of the current track),
+    /// "Recommended tracks", "More from <Artist>", "You might also like".
+    /// Populated alongside `related` on tab open. Empty when the watch
+    /// context returned a flat song list with no carousels (some
+    /// podcasts, explicit playlists).
+    private(set) var relatedSections: [HomeSection] = []
     /// Tune chips parsed from the latest `/next` response (e.g. All,
     /// Familiar, Discover, Popular, Telugu, 2010s, …). Empty when YT
     /// didn't include a chip cloud for the current watch context.
@@ -564,6 +571,7 @@ final class PlayerBridge {
                 self.lyricsLines = []
                 self.lyricsTimed = false
                 self.related = []
+                self.relatedSections = []
             }
         }
     }
@@ -655,14 +663,31 @@ final class PlayerBridge {
         }
     }
 
-    /// Lazy-load related songs on tab open.
+    /// Lazy-load related songs on tab open. Single browse round-trip
+    /// produces both the flat song list (`related`) and the titled
+    /// shelves (`relatedSections`, including "Other versions" / "Other
+    /// performances" — the live, acoustic, cover variants A5 surfaces).
     func loadRelatedIfNeeded() {
-        guard related.isEmpty, let id = relatedBrowseId else { return }
+        guard related.isEmpty, relatedSections.isEmpty, let id = relatedBrowseId else { return }
         Task { [innerTube, weak self] in
-            let items = (try? await innerTube.related(browseId: id)) ?? []
+            // One network call, two parses — fetch the raw body via
+            // `related(browseId:)` and reuse the same response for
+            // sections by hitting the public static parser. We can't
+            // share the body across two async calls without duplicating
+            // the request, so the section fetch issues its own call.
+            // Browse responses are cached server-side; both land fast.
+            async let itemsTask = (try? await innerTube.related(browseId: id)) ?? []
+            async let sectionsTask = (try? await innerTube.relatedSections(browseId: id)) ?? []
+            let items = await itemsTask
+            let sections = await sectionsTask
             await MainActor.run {
                 guard let self else { return }
                 self.related = items.filter { !self.shouldBlock($0) }
+                self.relatedSections = sections.compactMap { section in
+                    let filtered = section.items.filter { !self.shouldBlock($0) }
+                    guard !filtered.isEmpty else { return nil }
+                    return HomeSection(id: section.id, title: section.title, items: filtered)
+                }
             }
         }
     }

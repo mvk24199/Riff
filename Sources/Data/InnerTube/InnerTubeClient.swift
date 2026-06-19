@@ -666,6 +666,46 @@ final class InnerTubeClient: @unchecked Sendable {
         return Self.scanForMediaItems(body)
     }
 
+    /// Fetch the Related-tab browse response and split it into the
+    /// titled shelves YT actually shipped — "Other versions" /
+    /// "Other performances" (live, acoustic, cover variants of the
+    /// current track), "Recommended tracks", "More from <Artist>",
+    /// "You might also like", etc. Each shelf is a `musicCarouselShelfRenderer`
+    /// at `…sectionListRenderer.contents[]`; reuses `parseHomeShelf`
+    /// so the visual treatment matches Home rails. Returns an empty
+    /// array when YT didn't include sectioned shelves (some watch
+    /// contexts return a flat song list only).
+    func relatedSections(browseId: String) async throws -> [HomeSection] {
+        let body = try await postRaw(.browse, body: ["browseId": browseId])
+        return Self.parseRelatedSections(body)
+    }
+
+    /// Pull `musicCarouselShelfRenderer` (and friends) shelves out of
+    /// a Related-tab browse response. Walks both the single-column
+    /// and two-column layouts so we don't silently drop shelves on
+    /// the newer desktop response shape — same defense the album
+    /// detail parser uses (see `detail(forBrowseId:)`).
+    static func parseRelatedSections(_ body: [String: Any]) -> [HomeSection] {
+        let singleCol = Parsing.array(body, "contents",
+            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        let twoCol = Parsing.array(body, "contents",
+            "twoColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        // Plain `contents.sectionListRenderer.contents` — observed on some
+        // related browse responses that skip the tabbed wrapper.
+        let flat = Parsing.array(body, "contents",
+            "sectionListRenderer", "contents") ?? []
+        var seen = Set<String>()
+        var sections: [HomeSection] = []
+        for shelf in (singleCol + twoCol + flat) {
+            guard let section = parseHomeShelf(shelf), !seen.contains(section.id) else { continue }
+            seen.insert(section.id)
+            sections.append(section)
+        }
+        return sections
+    }
+
     /// Detail page for an album / playlist / podcast — header info plus
     /// tracklist. Same `/browse` endpoint with the corresponding browseId.
     /// `playlistId` (when known) is the playable playlist for the whole

@@ -311,6 +311,86 @@ final class InnerTubeParserTests: XCTestCase {
             "Shelves with no parsable items must be dropped — otherwise empty rails leak into Home")
     }
 
+    // MARK: - parseRelatedSections
+
+    /// Mimic the /next Related-tab browse response shape: a
+    /// `singleColumnBrowseResultsRenderer` with a single tab whose
+    /// `sectionListRenderer.contents` hold one or more
+    /// `musicCarouselShelfRenderer` shelves. A real response carries
+    /// an "Other versions" shelf (live / acoustic / cover variants)
+    /// + "Recommended tracks"; we verify both are surfaced as
+    /// titled HomeSections with their items intact.
+    func testParseRelatedSectionsSurfacesTitledShelves() {
+        let body: [String: Any] = [
+            "contents": [
+                "singleColumnBrowseResultsRenderer": [
+                    "tabs": [[
+                        "tabRenderer": [
+                            "content": [
+                                "sectionListRenderer": [
+                                    "contents": [
+                                        [
+                                            "musicCarouselShelfRenderer": [
+                                                "header": [
+                                                    "musicCarouselShelfBasicHeaderRenderer": [
+                                                        "title": ["runs": [["text": "Other versions"]]]
+                                                    ]
+                                                ],
+                                                "contents": [[
+                                                    "musicTwoRowItemRenderer": [
+                                                        "title": ["runs": [["text": "Sample Song (Live)"]]],
+                                                        "subtitle": ["runs": [["text": "Artist"]]],
+                                                        "navigationEndpoint": ["watchEndpoint": ["videoId": "live1"]]
+                                                    ]
+                                                ], [
+                                                    "musicTwoRowItemRenderer": [
+                                                        "title": ["runs": [["text": "Sample Song (Acoustic)"]]],
+                                                        "subtitle": ["runs": [["text": "Artist"]]],
+                                                        "navigationEndpoint": ["watchEndpoint": ["videoId": "acou1"]]
+                                                    ]
+                                                ]]
+                                            ]
+                                        ],
+                                        [
+                                            "musicCarouselShelfRenderer": [
+                                                "header": [
+                                                    "musicCarouselShelfBasicHeaderRenderer": [
+                                                        "title": ["runs": [["text": "Recommended tracks"]]]
+                                                    ]
+                                                ],
+                                                "contents": [[
+                                                    "musicTwoRowItemRenderer": [
+                                                        "title": ["runs": [["text": "Other Song"]]],
+                                                        "subtitle": ["runs": [["text": "Other Artist"]]],
+                                                        "navigationEndpoint": ["watchEndpoint": ["videoId": "rec1"]]
+                                                    ]
+                                                ]]
+                                            ]
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]]
+                ]
+            ]
+        ]
+        let sections = InnerTubeClient.parseRelatedSections(body)
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertEqual(sections.first?.title, "Other versions")
+        XCTAssertEqual(sections.first?.items.count, 2)
+        XCTAssertEqual(sections.first?.items.map(\.id), ["live1", "acou1"])
+        XCTAssertEqual(sections.last?.title, "Recommended tracks")
+        XCTAssertEqual(sections.last?.items.first?.id, "rec1")
+    }
+
+    /// Empty / unrecognized response — parser must not crash and must
+    /// return an empty array so callers can fall back to flat related.
+    func testParseRelatedSectionsEmptyOnUnknownShape() {
+        XCTAssertTrue(InnerTubeClient.parseRelatedSections([:]).isEmpty)
+        XCTAssertTrue(InnerTubeClient.parseRelatedSections(["contents": "garbage"]).isEmpty)
+    }
+
     // MARK: - MediaItem Codable round-trip
 
     /// Played-history persistence relies on this. If MediaItem ever
