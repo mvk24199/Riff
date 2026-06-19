@@ -114,13 +114,16 @@ final class QueueManagerTests: XCTestCase {
     /// they wrote there used to surface as "T / Artist" placeholder
     /// rows in the running app's Recently Played list.
     func testArchiveDoesNotPollutePerformanceUserDefaults() {
-        // Sentinel: capture .standard's view of the production key
-        // before and after; archive should not affect it.
-        let key = "player.history.v2"
-        let before = UserDefaults.standard.data(forKey: key)
+        // Sentinel: capture .standard's view of the production keys
+        // before and after; archive should not affect either. We check
+        // both v2 (legacy bare-MediaItem journal) and v3 (B1-era
+        // timestamped journal) because a regression that brings back
+        // .standard could land on either.
+        let keys = ["player.history.v2", "player.history.v3"]
+        let before = keys.map { UserDefaults.standard.data(forKey: $0) }
         let q = makeQueue()
         q.archive(item("a", title: "Test Pollution Sentinel"))
-        let after = UserDefaults.standard.data(forKey: key)
+        let after = keys.map { UserDefaults.standard.data(forKey: $0) }
         XCTAssertEqual(before, after,
             "Test-suite QueueManager must never write to UserDefaults.standard — that's the production app's history journal")
     }

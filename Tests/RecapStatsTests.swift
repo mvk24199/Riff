@@ -197,4 +197,98 @@ final class RecapStatsTests: XCTestCase {
 
         XCTAssertNil(stats.totalRuntimeSeconds)
     }
+
+    // MARK: - Windowed compute (B1)
+
+    /// Sanity: `.allTime` over a timestamped list matches the legacy
+    /// `compute(from: [MediaItem])` so the new entry point doesn't
+    /// silently re-derive anything. Order matters — totals are the
+    /// same, so this is the strictest comparison we can run without
+    /// re-asserting every sub-stat.
+    func testAllTimeMatchesLegacyCompute() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let entries: [PlayedEntry] = [
+            .init(item: song("a", artist: "A", duration: 100), playedAt: now.addingTimeInterval(-100_000)),
+            .init(item: song("b", artist: "B", duration: 200), playedAt: now.addingTimeInterval(-50_000)),
+            .init(item: song("a", artist: "A", duration: 100), playedAt: now.addingTimeInterval(-25_000)),
+        ]
+        let legacy = RecapStats.compute(from: entries.map(\.item))
+        let windowed = RecapStats.compute(from: entries, window: .allTime, now: now)
+
+        XCTAssertEqual(windowed.totalPlays, legacy.totalPlays)
+        XCTAssertEqual(windowed.uniqueTracks, legacy.uniqueTracks)
+        XCTAssertEqual(windowed.totalRuntimeSeconds, legacy.totalRuntimeSeconds)
+        XCTAssertEqual(windowed.topArtists, legacy.topArtists)
+    }
+
+    func testSevenDayWindowExcludesOlderEntries() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let day: TimeInterval = 60 * 60 * 24
+        let entries: [PlayedEntry] = [
+            .init(item: song("ancient", artist: "Old"), playedAt: now.addingTimeInterval(-30 * day)),
+            .init(item: song("recent-1", artist: "New"), playedAt: now.addingTimeInterval(-2 * day)),
+            .init(item: song("recent-2", artist: "New"), playedAt: now.addingTimeInterval(-1 * day)),
+        ]
+        let stats = RecapStats.compute(from: entries, window: .sevenDays, now: now)
+
+        XCTAssertEqual(stats.totalPlays, 2)
+        XCTAssertEqual(stats.uniqueTracks, 2)
+        XCTAssertEqual(stats.topArtists.first?.name, "New")
+    }
+
+    func testThirtyDayWindowIncludesBoundaryEntries() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let day: TimeInterval = 60 * 60 * 24
+        let entries: [PlayedEntry] = [
+            // Right on the cutoff (30 days ago) — half-open lookback
+            // (>= cutoff) means this counts.
+            .init(item: song("edge", artist: "A"), playedAt: now.addingTimeInterval(-30 * day)),
+            // One second outside.
+            .init(item: song("outside", artist: "B"), playedAt: now.addingTimeInterval(-30 * day - 1)),
+        ]
+        let stats = RecapStats.compute(from: entries, window: .thirtyDays, now: now)
+
+        XCTAssertEqual(stats.totalPlays, 1)
+        XCTAssertEqual(stats.topTracks.first?.item.id, "edge")
+    }
+
+    func testNinetyDayWindowKeepsLastQuarter() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let day: TimeInterval = 60 * 60 * 24
+        let entries: [PlayedEntry] = [
+            .init(item: song("a"), playedAt: now.addingTimeInterval(-100 * day)),
+            .init(item: song("b"), playedAt: now.addingTimeInterval(-80 * day)),
+            .init(item: song("c"), playedAt: now.addingTimeInterval(-1 * day)),
+        ]
+        let stats = RecapStats.compute(from: entries, window: .ninetyDays, now: now)
+
+        XCTAssertEqual(stats.totalPlays, 2)
+        XCTAssertEqual(Set(stats.topTracks.map(\.item.id)), Set(["b", "c"]))
+    }
+
+    /// Migrated pre-B1 entries carry `Date.distantPast`. They should
+    /// never appear in a bounded window — including them would lie
+    /// about when they played.
+    func testDistantPastEntriesExcludedFromBoundedWindows() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let entries: [PlayedEntry] = [
+            .init(item: song("migrated"), playedAt: .distantPast),
+            .init(item: song("today"), playedAt: now.addingTimeInterval(-3600)),
+        ]
+        let sevenDay = RecapStats.compute(from: entries, window: .sevenDays, now: now)
+        let allTime = RecapStats.compute(from: entries, window: .allTime, now: now)
+
+        XCTAssertEqual(sevenDay.totalPlays, 1)
+        XCTAssertEqual(sevenDay.topTracks.first?.item.id, "today")
+        // All-time still includes them — we have an item, we just don't
+        // know when. Showing it under "All time" is honest.
+        XCTAssertEqual(allTime.totalPlays, 2)
+    }
+
+    func testEmptyEntriesProducesEmptyStatsAcrossAllWindows() {
+        for window in RecapWindow.allCases {
+            let stats = RecapStats.compute(from: [], window: window)
+            XCTAssertTrue(stats.isEmpty, "Window \(window) should be empty")
+        }
+    }
 }

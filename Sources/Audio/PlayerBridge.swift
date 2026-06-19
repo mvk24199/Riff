@@ -25,6 +25,10 @@ final class PlayerBridge {
     /// the actual storage moves to `QueueManager`.
     var upNext: [MediaItem] { queue.upNext }
     var playedHistory: [MediaItem] { queue.playedHistory }
+    /// Timestamped played history. Consumed by the always-on Stats
+    /// surface (B1) so its 7d / 30d / 90d filters can read play wall
+    /// times directly. Legacy callers continue using `playedHistory`.
+    var playedEntries: [PlayedEntry] { queue.playedEntries }
 
     private(set) var related: [MediaItem] = []
     /// Titled shelves YT shipped on the Related tab — "Other versions"

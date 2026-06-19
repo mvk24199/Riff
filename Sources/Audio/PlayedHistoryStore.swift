@@ -1,5 +1,21 @@
 import Foundation
 
+/// One entry in the played-history journal: a `MediaItem` plus the
+/// wall-clock `Date` when it was archived. The timestamp is required by
+/// the Stats surface (B1) to render time-windowed views — 7-day,
+/// 30-day, 90-day, all-time — over the same history the year-end Recap
+/// already aggregates.
+///
+/// Pre-B1 the journal stored `[MediaItem]` directly. We migrate on
+/// load: existing entries get `Date.distantPast` so they continue to
+/// appear in the "All time" window but are excluded from any bounded
+/// window (which is the only honest behaviour — we don't know when they
+/// played).
+struct PlayedEntry: Equatable, Hashable, Sendable, Codable {
+    let item: MediaItem
+    let playedAt: Date
+}
+
 /// Tiny encapsulation of the locally-persisted played-history journal.
 /// Pulled out of `PlayerBridge` (audit §6.8) so the journal lifecycle
 /// has one obvious owner. The rest of `PlayerBridge` keeps its own
@@ -7,7 +23,7 @@ import Foundation
 /// owns the disk side only.
 ///
 /// Writes are eager — every `archive(_:)` synchronously persists.
-/// History is small (cap 50 items) so the encode cost is microseconds
+/// History is small (cap N items) so the encode cost is microseconds
 /// and an unexpected crash never loses more than the *current* track.
 ///
 /// **Storage isolation:** `defaults` is injectable. Production uses
@@ -17,24 +33,23 @@ import Foundation
 /// and `xcodebuild test` polluted production defaults with rows like
 /// `{title: "T", subtitle: "Artist"}` from test fixtures.)
 ///
-/// **Storage key versioning:** the `v2` suffix is a one-time wipe to
-/// clear test pollution from existing user installs. Future schema
-/// changes should bump the version in the same way; UserDefaults
-/// supports millions of orphan keys without ill effect, so the
-/// abandoned `v1` key is safe to leave.
+/// **Storage key versioning:** `v3` carries timestamps; the legacy
+/// `v2` key stored bare `[MediaItem]`. On first launch after the B1
+/// migration, `load()` reads the v2 blob (if present), wraps each item
+/// in a `PlayedEntry` with `Date.distantPast`, persists under v3, and
+/// removes v2. Future schema changes should bump the version in the
+/// same way; UserDefaults supports millions of orphan keys without ill
+/// effect, so the abandoned keys are safe to leave.
 struct PlayedHistoryStore {
-    private static let key = "player.history.v2"
+    private static let key = "player.history.v3"
+    private static let legacyKey = "player.history.v2"
     let cap: Int
     let defaults: UserDefaults
 
     init(cap: Int, defaults: UserDefaults = .standard) {
         self.cap = cap
         self.defaults = defaults
-        // Opportunistic one-time cleanup of the legacy key. Cheap and
-        // bounded: it runs once per process. Anyone whose v1 store had
-        // legitimate data loses it; in practice the only people with
-        // v1 data are the developer running tests, and this is the
-        // entry point for the pollution-fix anyway.
+        // Opportunistic one-time cleanup of the long-abandoned v1 key.
         defaults.removeObject(forKey: "player.history")
     }
 
@@ -42,20 +57,36 @@ struct PlayedHistoryStore {
     /// `cap` so a corrupted/giant store can't balloon memory; the
     /// most-recent N are kept (history is appended in chronological
     /// order, so `suffix()` preserves the latest plays).
-    func load() -> [MediaItem] {
-        guard let data = defaults.data(forKey: Self.key),
-              let decoded = try? JSONDecoder().decode([MediaItem].self, from: data) else {
-            return []
+    ///
+    /// Handles the v2 → v3 migration in-line: if the v3 key is missing
+    /// but the v2 key exists, decode v2 as `[MediaItem]`, wrap each in
+    /// a `PlayedEntry(playedAt: .distantPast)`, persist under v3, and
+    /// drop v2. Distant-past means windowed Stats views (7d/30d/90d)
+    /// won't include those entries — which is correct, since we genuinely
+    /// don't know when they played — while "All time" still does.
+    func load() -> [PlayedEntry] {
+        if let data = defaults.data(forKey: Self.key),
+           let decoded = try? JSONDecoder().decode([PlayedEntry].self, from: data) {
+            return Array(decoded.suffix(cap))
         }
-        return Array(decoded.suffix(cap))
+        // v2 fallback
+        if let data = defaults.data(forKey: Self.legacyKey),
+           let legacy = try? JSONDecoder().decode([MediaItem].self, from: data) {
+            let migrated = legacy.map { PlayedEntry(item: $0, playedAt: .distantPast) }
+            let trimmed = Array(migrated.suffix(cap))
+            save(trimmed)
+            defaults.removeObject(forKey: Self.legacyKey)
+            return trimmed
+        }
+        return []
     }
 
     /// Persist the current full history. Caller is responsible for
     /// applying `cap` before passing it in — keeps the rule "the
     /// in-memory array is the source of truth, this just mirrors it"
     /// from drifting.
-    func save(_ items: [MediaItem]) {
-        guard let data = try? JSONEncoder().encode(items) else { return }
+    func save(_ entries: [PlayedEntry]) {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
         defaults.set(data, forKey: Self.key)
     }
 
@@ -64,5 +95,6 @@ struct PlayedHistoryStore {
     /// seeing the previous session's plays.
     func clear() {
         defaults.removeObject(forKey: Self.key)
+        defaults.removeObject(forKey: Self.legacyKey)
     }
 }
