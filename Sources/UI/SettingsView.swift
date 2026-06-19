@@ -29,6 +29,17 @@ struct SettingsView: View {
     @State private var aiTestResult: TestResult? = nil
     @State private var aiTestInFlight: Bool = false
 
+    /// Buffer for the lyrics-translation language picker. The picker
+    /// selection lives on `env.translationLanguage` (persisted); this
+    /// `@State` is the visual selection of the segmented control — we
+    /// route "Other..." through `customLanguageBuffer` so the user can
+    /// type in a language not in the preset list. Sentinel that flags
+    /// the picker as in "Other" mode. Distinct from any real language
+    /// name we'd render, so a user typing "Other" as a real language
+    /// is impossible — but it's just a UI sentinel.
+    @State private var customLanguageBuffer: String = ""
+    private static let otherLanguageSentinel = "Other…"
+
     enum TestResult: Equatable {
         case success
         case failure(String)
@@ -289,6 +300,12 @@ struct SettingsView: View {
                 }
             }
 
+            // Translation language picker (B3). The toggle that
+            // actually flips translation on/off lives on the Now
+            // Playing lyrics tab — this picker just sets the *target*
+            // so the user's choice persists across tracks.
+            translationLanguagePicker
+
             HStack {
                 Button("Save key") { saveAnthropicKey() }
                     .buttonStyle(.borderedProminent)
@@ -310,6 +327,12 @@ struct SettingsView: View {
                 if AnthropicProvider.storedAPIKey() != nil {
                     Button("Clear") {
                         AnthropicProvider.clearAPIKey()
+                        // Dropping the key also invalidates any
+                        // translations made under it — a fresh key may
+                        // be a different account / model, and we don't
+                        // want stale cached output bleeding into the
+                        // new session.
+                        env.lyricsTranslator.clearCache()
                         anthropicAPIKey = ""
                         aiSaveStatus = "Key removed."
                         aiTestResult = nil
@@ -338,6 +361,84 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// Picker + "Other..." textfield for the lyrics-translation target
+    /// language (B3). Selection routes through `env.translationLanguage`
+    /// so it's persisted globally; the SwiftUI binding owns the picker
+    /// state via a computed binding that maps the "Other" sentinel to
+    /// the free-text buffer.
+    @ViewBuilder
+    private var translationLanguagePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Lyrics translation language")
+                .font(.system(size: 12, weight: .semibold))
+            // Compute the picker selection: if the current language is
+            // one of the presets, show it directly; otherwise fall
+            // through to the "Other..." sentinel and surface the free
+            // text in the buffer field.
+            let isPreset = LyricsTranslator.presetLanguages.contains(env.translationLanguage)
+            let selection = Binding<String>(
+                get: { isPreset ? env.translationLanguage : Self.otherLanguageSentinel },
+                set: { new in
+                    if new == Self.otherLanguageSentinel {
+                        // Flip to Other... — seed the buffer with the
+                        // existing custom value (or a sensible default)
+                        // and let the user edit. Don't overwrite
+                        // env.translationLanguage until they type.
+                        customLanguageBuffer = isPreset ? "" : env.translationLanguage
+                    } else {
+                        env.translationLanguage = new
+                    }
+                }
+            )
+            Picker("", selection: selection) {
+                ForEach(LyricsTranslator.presetLanguages, id: \.self) { lang in
+                    Text(lang).tag(lang)
+                }
+                Divider()
+                Text(Self.otherLanguageSentinel).tag(Self.otherLanguageSentinel)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+            if !isPreset || selection.wrappedValue == Self.otherLanguageSentinel {
+                TextField(
+                    "e.g. Portuguese, Russian, Vietnamese",
+                    text: $customLanguageBuffer
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+                .onAppear {
+                    // Seed the buffer from env on first appearance so
+                    // the field shows the persisted custom language
+                    // (instead of being blank) when reopening Settings.
+                    if customLanguageBuffer.isEmpty {
+                        customLanguageBuffer = env.translationLanguage
+                    }
+                }
+                .onSubmit(saveCustomLanguage)
+                Button("Apply") { saveCustomLanguage() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(customLanguageBuffer.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            Text("Used when you turn on translation on the Now Playing lyrics tab. Translations are cached per song and language for the current session.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func saveCustomLanguage() {
+        let trimmed = customLanguageBuffer.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        env.translationLanguage = trimmed
+        // Cache invalidates implicitly — the cache key includes the
+        // language, so switching to a new one just won't hit a cached
+        // entry. We don't clearCache() here because the user might
+        // toggle between two languages back and forth.
     }
 
     private func modelDisplayName(_ id: String) -> String {
