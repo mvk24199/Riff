@@ -61,15 +61,17 @@ struct RiffApp: App {
             }
         }
 
-        // Always-on-top compact playback strip in a separate window.
-        // Open via Window → Mini Player (⌥⌘M).
+        // Always-on-top compact playback tile in a separate window.
+        // Open via Window → Mini Player (⌥⌘M). The user can grow the
+        // window past the 280×140 minimum — the artwork fills whatever
+        // size they pick — but cannot shrink below it.
         Window("Mini Player", id: "mini-player") {
             FloatingMiniPlayerView()
                 .environment(environment)
         }
-        .defaultSize(width: 360, height: 70)
+        .defaultSize(width: 320, height: 180)
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
     }
 }
 
