@@ -36,18 +36,21 @@ private func liveEnvironment() throws -> AppEnvironment {
 
 // Play "<query>" on Riff — searches songs and plays the first result.
 struct PlayTrackIntent: AppIntent {
-    static var title: LocalizedStringResource = "Play Song"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Play Song"
+    static let description = IntentDescription(
         "Search YouTube Music and play the first matching song in Riff.",
         categoryName: "Playback"
     )
     // Bring Riff to the foreground when invoked from Spotlight / Siri.
-    static var openAppWhenRun: Bool = true
+    static let openAppWhenRun: Bool = true
 
+    // NOTE: the `requestValueDialog:` overload of @Parameter only
+    // accepts AppEntity / AppEnum types, not String. Siri still
+    // prompts for a missing value using the parameter title +
+    // description, so the dialog-less init is fine here.
     @Parameter(
         title: "Song",
-        description: "Title or 'title artist' — same string you'd type into Search.",
-        requestValueDialog: "What would you like to play?"
+        description: "Title or 'title artist' — same string you'd type into Search."
     )
     var query: String
 
@@ -76,17 +79,16 @@ struct PlayTrackIntent: AppIntent {
 
 // Start a radio station for "<artist>" on Riff.
 struct PlayArtistRadioIntent: AppIntent {
-    static var title: LocalizedStringResource = "Start Artist Radio"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Start Artist Radio"
+    static let description = IntentDescription(
         "Search for an artist and start an endless radio station based on them.",
         categoryName: "Playback"
     )
-    static var openAppWhenRun: Bool = true
+    static let openAppWhenRun: Bool = true
 
     @Parameter(
         title: "Artist",
-        description: "Artist name to seed a radio station.",
-        requestValueDialog: "Which artist?"
+        description: "Artist name to seed a radio station."
     )
     var artist: String
 
@@ -115,8 +117,8 @@ struct PlayArtistRadioIntent: AppIntent {
 // Resume Riff — toggles play. If nothing is loaded, the bridge no-ops
 // (the underlying `togglePlay()` targets the current <video>).
 struct ResumePlaybackIntent: AppIntent {
-    static var title: LocalizedStringResource = "Resume Riff"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Resume Riff"
+    static let description = IntentDescription(
         "Resume playback in Riff.",
         categoryName: "Playback"
     )
@@ -138,8 +140,8 @@ struct ResumePlaybackIntent: AppIntent {
 // same `togglePlay()` entrypoint as Resume; we guard against pausing
 // an already-paused player by checking `isPlaying` first.
 struct PausePlaybackIntent: AppIntent {
-    static var title: LocalizedStringResource = "Pause Riff"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Pause Riff"
+    static let description = IntentDescription(
         "Pause playback in Riff.",
         categoryName: "Playback"
     )
@@ -158,8 +160,8 @@ struct PausePlaybackIntent: AppIntent {
 
 // Skip on Riff — advance to the next track in the queue.
 struct SkipNextIntent: AppIntent {
-    static var title: LocalizedStringResource = "Skip to Next Track"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Skip to Next Track"
+    static let description = IntentDescription(
         "Skip to the next track in the Riff queue.",
         categoryName: "Playback"
     )
