@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Full-screen player. Layout matches YT Music desktop:
@@ -446,6 +447,7 @@ struct NowPlayingView: View {
                 Task { await env.player.toggleRepeat() }
             }
             playbackRateMenu
+            audioOutputButton
             sleepTimerMenu
             addToPlaylistMenu
             moreMenu
@@ -534,6 +536,47 @@ struct NowPlayingView: View {
     /// "More" (•••) menu — surfaces Go to album / Go to artist / Start
     /// radio for the currently playing track without requiring the user
     /// to right-click. Mirrors YT Music's track-overflow affordance.
+    /// Audio output / AirPlay route picker (B10).
+    ///
+    /// Audio is driven by WKWebView's `<video>` element, so the macOS
+    /// system audio routing handles AirPlay at the OS level. The iOS
+    /// `AVRoutePickerView` API does not exist on macOS, and surfacing a
+    /// CoreAudio-enumerated device popover from inside the app would
+    /// not include AirPlay receivers (which only the Sound preference
+    /// pane fully surfaces). The pragmatic v1 is a transport-row button
+    /// that opens System Settings → Sound → Output, where AirPlay
+    /// devices, Bluetooth output, and built-in speakers all live in
+    /// one consistent picker the user already trusts.
+    ///
+    /// Falls back to opening the generic Sound preference pane if the
+    /// modern URL is rejected by the OS (older macOS releases).
+    private var audioOutputButton: some View {
+        Button {
+            openSoundOutputSettings()
+        } label: {
+            Image(systemName: "airplayaudio")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Audio output (opens System Settings → Sound)")
+    }
+
+    /// Opens macOS Sound → Output settings. Tries the modern
+    /// `com.apple.preference.sound` URL first, falls back to the legacy
+    /// `.prefPane` bundle if the URL handler isn't registered.
+    private func openSoundOutputSettings() {
+        let urlString = "x-apple.systempreferences:com.apple.preference.sound?Output"
+        if let url = URL(string: urlString), NSWorkspace.shared.open(url) {
+            return
+        }
+        // Fallback: open the Sound prefpane bundle directly.
+        let fallback = URL(fileURLWithPath: "/System/Library/PreferencePanes/Sound.prefPane")
+        NSWorkspace.shared.open(fallback)
+    }
+
     private var moreMenu: some View {
         Menu {
             nowPlayingMenuItems
