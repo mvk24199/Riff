@@ -25,6 +25,11 @@ struct TrackContextMenu: View {
     /// When true, omits the Play action — useful for the queue's own
     /// rows where the row's primary tap already plays it.
     var omitPrimaryPlay: Bool = false
+    /// When true, adds a Pin / Unpin row at the bottom of the menu.
+    /// Set by the Library tab's `ThumbnailButton` instances; off
+    /// everywhere else so we don't clutter the menu in Home / Search
+    /// / Now Playing surfaces where pinning has no destination.
+    var showPinAction: Bool = false
 
     var body: some View {
         if !omitPrimaryPlay {
@@ -98,6 +103,12 @@ struct TrackContextMenu: View {
                 let pb = NSPasteboard.general
                 pb.clearContents()
                 pb.setString(url, forType: .string)
+            }
+        }
+        if showPinAction {
+            Divider()
+            Button(env.isPinned(item.id) ? "Unpin from top" : "Pin to top") {
+                env.togglePinned(id: item.id)
             }
         }
     }

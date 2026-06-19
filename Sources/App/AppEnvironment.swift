@@ -223,6 +223,50 @@ final class AppEnvironment {
         UserDefaults.standard.set(blockedArtists, forKey: Self.blockedArtistsKey)
     }
 
+    /// Set of MediaItem ids the user has explicitly pinned to the top
+    /// of their Library section grid. Persisted under `library.pinned`
+    /// in UserDefaults as a sorted `[String]` (Set is not a PLIST type).
+    ///
+    /// Pinning is purely client-side and cross-section: the same set is
+    /// consulted by every Library section (playlists, albums, podcasts,
+    /// artists). An item with id "X" pinned in the Playlists view stays
+    /// pinned if it ever shows up in Albums — which it won't, but the
+    /// id-based shape makes that trivially correct.
+    ///
+    /// We deliberately don't gate pinning on `isSignedIn`: anonymous
+    /// users still see a Library tab (it just renders the empty state),
+    /// and the moment they sign in their pins are already in place.
+    private(set) var pinnedLibraryIds: Set<String> = []
+    private static let pinnedLibraryIdsKey = "library.pinned"
+
+    func isPinned(_ id: String) -> Bool {
+        !id.isEmpty && pinnedLibraryIds.contains(id)
+    }
+
+    /// Toggle the pin state of a Library item. The Pin / Unpin button
+    /// in `TrackContextMenu` and `ThumbnailButton`'s context menu both
+    /// route through here so the persistence side-effect lives in one
+    /// place.
+    func togglePinned(id: String) {
+        guard !id.isEmpty else { return }
+        if pinnedLibraryIds.contains(id) {
+            pinnedLibraryIds.remove(id)
+        } else {
+            pinnedLibraryIds.insert(id)
+        }
+        persistPinnedLibrary()
+    }
+
+    private func persistPinnedLibrary() {
+        UserDefaults.standard.set(pinnedLibraryIds.sorted(), forKey: Self.pinnedLibraryIdsKey)
+    }
+
+    private func loadPinnedLibrary() {
+        if let arr = UserDefaults.standard.stringArray(forKey: Self.pinnedLibraryIdsKey) {
+            pinnedLibraryIds = Set(arr)
+        }
+    }
+
     private func loadBlockedArtists() {
         if let dict = UserDefaults.standard.dictionary(forKey: Self.blockedArtistsKey) as? [String: String] {
             blockedArtists = dict
@@ -298,6 +342,7 @@ final class AppEnvironment {
         self.nowPlaying = NowPlayingCenter(player: player)
         self.refreshSignedInState()
         self.loadBlockedArtists()
+        self.loadPinnedLibrary()
         // Honor the persisted menu-bar-extra toggle. The key defaults to
         // `true` when absent (first launch / never-toggled), preserving
         // the "show by default" behavior. Read via `object(forKey:)` so

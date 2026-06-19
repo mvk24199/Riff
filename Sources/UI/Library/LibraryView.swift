@@ -18,17 +18,43 @@ struct LibraryView: View {
     /// dropdown. The InnerTube response order is "recently added"
     /// (most-recent first), so we treat that as the natural ordering
     /// and sort A-Z / Z-A as local permutations on top of it.
+    ///
+    /// `playCount` and `lastPlayed` are derived from the local
+    /// `PlayerBridge.playedEntries` journal — InnerTube doesn't surface
+    /// per-track listening stats on the Liked Songs browse response,
+    /// so we count locally. These two orders are only meaningful for
+    /// individual songs (i.e. the Liked section) and are hidden in the
+    /// menu for other sections.
     enum SortOrder: String, CaseIterable, Identifiable {
         case recentlyAdded = "Recently added"
         case aToZ = "A to Z"
         case zToA = "Z to A"
+        case playCount = "Most played"
+        case lastPlayed = "Last played"
         var id: String { rawValue }
+
+        /// Sorts that depend on the local play-history journal. They
+        /// only make sense for song rows (the Liked section), so the
+        /// dropdown filters them out for Playlists / Albums / etc.
+        var requiresPlayHistory: Bool {
+            switch self {
+            case .playCount, .lastPlayed: return true
+            case .recentlyAdded, .aToZ, .zToA: return false
+            }
+        }
     }
 
-    /// Items after applying the search-within-library filter and the
-    /// active sort. Computed property keeps the view declaration tidy
-    /// and avoids stale state when the user switches sort/filter
-    /// without re-fetching.
+    /// Items after applying the search-within-library filter, the
+    /// active sort, and the user's pinned-id partition. Computed
+    /// property keeps the view declaration tidy and avoids stale state
+    /// when the user switches sort/filter without re-fetching.
+    ///
+    /// Order of operations: filter → sort → float pinned to top.
+    /// Pinning is applied LAST so it always wins regardless of the
+    /// chosen sort — that's the whole point of pinning. Within the
+    /// pinned head and the unpinned tail we still preserve the sort,
+    /// so the user's mental model ("Recently added, but my favorites
+    /// first") stays intact.
     private var displayedItems: [MediaItem] {
         let filtered: [MediaItem]
         let needle = filterText.trimmingCharacters(in: .whitespaces).lowercased()
@@ -40,13 +66,49 @@ struct LibraryView: View {
                     || $0.subtitle.lowercased().contains(needle)
             }
         }
+        let sorted: [MediaItem]
         switch sort {
         case .recentlyAdded:
-            return filtered  // server order — newest first
+            sorted = filtered  // server order — newest first
         case .aToZ:
-            return filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            sorted = filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         case .zToA:
-            return filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+            sorted = filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+        case .playCount:
+            let counts = LibrarySorting.playCounts(from: env.player.playedEntries)
+            sorted = filtered.sorted {
+                let lhs = counts[$0.id] ?? 0
+                let rhs = counts[$1.id] ?? 0
+                if lhs == rhs {
+                    // Tie-break alphabetically so the order is stable
+                    // (otherwise SwiftUI would shuffle equally-played
+                    // rows on every play-count tick).
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return lhs > rhs  // most-played first
+            }
+        case .lastPlayed:
+            let last = LibrarySorting.lastPlayed(from: env.player.playedEntries)
+            sorted = filtered.sorted {
+                let lhs = last[$0.id] ?? .distantPast
+                let rhs = last[$1.id] ?? .distantPast
+                if lhs == rhs {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return lhs > rhs  // most-recent first
+            }
+        }
+        return LibrarySorting.partitionPinned(sorted, pinned: env.pinnedLibraryIds)
+    }
+
+    /// Sort orders shown in the dropdown for the current section.
+    /// Liked Songs gets the full set (incl. play-count / last-played
+    /// derived from local history); other sections get only the
+    /// server-order-friendly orders since play counts on a *playlist*
+    /// row don't have a meaningful definition here.
+    private var availableSorts: [SortOrder] {
+        SortOrder.allCases.filter { order in
+            !order.requiresPlayHistory || section == .liked
         }
     }
 
@@ -99,7 +161,7 @@ struct LibraryView: View {
                 Spacer()
 
                 Menu {
-                    ForEach(SortOrder.allCases) { order in
+                    ForEach(availableSorts) { order in
                         Button {
                             sort = order
                         } label: {
@@ -164,7 +226,28 @@ struct LibraryView: View {
                         .padding(.top, 60)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], spacing: 16) {
-                        ForEach(displayedItems) { item in ThumbnailButton(item: item) }
+                        ForEach(displayedItems) { item in
+                            ThumbnailButton(item: item, showPinAction: true)
+                                .overlay(alignment: .topLeading) {
+                                    // Visual cue: tiny pin badge on the
+                                    // tile when this item is pinned, so
+                                    // the user can spot which tiles are
+                                    // floating to the top by choice vs.
+                                    // by natural sort order. Off-grid
+                                    // when not pinned so unpinned tiles
+                                    // are visually unchanged.
+                                    if env.isPinned(item.id) {
+                                        Image(systemName: "pin.fill")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.white)
+                                            .padding(5)
+                                            .background(Theme.red, in: Circle())
+                                            .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
+                                            .padding(6)
+                                            .help("Pinned — right-click to unpin")
+                                    }
+                                }
+                        }
                     }
                     .padding(.horizontal, 24)
                 }
@@ -175,6 +258,14 @@ struct LibraryView: View {
             // Liked then jumping to Albums shouldn't carry the needle
             // forward; the user's intent moved with the section.
             filterText = ""
+            // If the active sort is no longer offered in the new
+            // section (e.g. user picked "Most played" in Liked then
+            // switched to Albums), reset to the default rather than
+            // leave the dropdown showing an option that isn't in its
+            // menu. Recently-added is always the safe fallback.
+            if !availableSorts.contains(sort) {
+                sort = .recentlyAdded
+            }
             await load()
         }
     }
