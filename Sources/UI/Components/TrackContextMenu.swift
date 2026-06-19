@@ -105,6 +105,14 @@ struct TrackContextMenu: View {
                 pb.setString(url, forType: .string)
             }
         }
+        // D2 — "Edit metadata" opens a sheet pre-populated with the
+        // current title / artist / album. Songs only; non-song rows
+        // (album / playlist / artist tiles) are out of scope.
+        if item.kind == .song {
+            Button("Edit metadata…") {
+                env.trackBeingEdited = item
+            }
+        }
         if showPinAction {
             Divider()
             Button(env.isPinned(item.id) ? "Unpin from top" : "Pin to top") {

@@ -300,6 +300,14 @@ struct RootView: View {
         .sheet(isPresented: $env.isQueueBuilderSheetPresented) {
             QueueBuilderSheet()
         }
+        // D2 — Edit-metadata sheet. `item:` binding mode so the sheet
+        // is parameterized by the row the user opened it from.
+        .sheet(item: Binding(
+            get: { env.trackBeingEdited },
+            set: { env.trackBeingEdited = $0 }
+        )) { item in
+            EditMetadataSheet(item: item)
+        }
     }
 }
 

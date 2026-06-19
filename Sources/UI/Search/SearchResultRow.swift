@@ -113,10 +113,19 @@ struct SearchResultRow: View {
                 }
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(env.displayTitle(for: item))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if env.hasMetadataOverride(item) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .help("Metadata edited locally")
+                            .accessibilityLabel("Metadata edited")
+                    }
+                }
                 Text(formattedSubtitle)
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.75))
@@ -153,8 +162,28 @@ struct SearchResultRow: View {
     /// Appends duration ("• 3:42") for songs/episodes that carry one,
     /// and the year for items that have it without already being in
     /// the subtitle text.
+    ///
+    /// D2: route through `env.displaySubtitle(for:)` so an artist /
+    /// album override on a song row replaces those segments before
+    /// the kind / duration / year decoration gets layered on top.
     private var formattedSubtitle: String {
-        formatSearchSubtitle(item, kindLabel: kindLabel)
+        var overridden = item
+        let display = env.displaySubtitle(for: item)
+        if display != item.subtitle {
+            overridden = MediaItem(
+                id: item.id,
+                kind: item.kind,
+                title: item.title,
+                subtitle: display,
+                thumbnailURL: item.thumbnailURL,
+                albumId: item.albumId,
+                artistId: item.artistId,
+                setVideoId: item.setVideoId,
+                durationSeconds: item.durationSeconds,
+                year: item.year
+            )
+        }
+        return formatSearchSubtitle(overridden, kindLabel: kindLabel)
     }
 
     private var kindLabel: String { kindLabelString(item.kind) }
@@ -213,10 +242,19 @@ struct TopResultCard: View {
             .clipShape(item.kind == .artist ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 10)))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(item.title)
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(env.displayTitle(for: item))
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                    if env.hasMetadataOverride(item) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .help("Metadata edited locally")
+                            .accessibilityLabel("Metadata edited")
+                    }
+                }
                 Text(formattedSubtitle)
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.7))
@@ -254,7 +292,23 @@ struct TopResultCard: View {
     }
 
     private var formattedSubtitle: String {
-        formatSearchSubtitle(item, kindLabel: kindLabel)
+        var overridden = item
+        let display = env.displaySubtitle(for: item)
+        if display != item.subtitle {
+            overridden = MediaItem(
+                id: item.id,
+                kind: item.kind,
+                title: item.title,
+                subtitle: display,
+                thumbnailURL: item.thumbnailURL,
+                albumId: item.albumId,
+                artistId: item.artistId,
+                setVideoId: item.setVideoId,
+                durationSeconds: item.durationSeconds,
+                year: item.year
+            )
+        }
+        return formatSearchSubtitle(overridden, kindLabel: kindLabel)
     }
 
     private var kindLabel: String { kindLabelString(item.kind) }
