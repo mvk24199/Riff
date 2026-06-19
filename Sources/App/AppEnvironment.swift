@@ -107,6 +107,33 @@ final class AppEnvironment {
         (AnthropicProvider.storedAPIKey()?.isEmpty == false)
     }
 
+    /// Lyrics translation engine (B3). Caches per `(videoId, language)`
+    /// in memory; no persistence across launches. @ObservationIgnored
+    /// for the same `lazy var` reason as `llmProvider`. The translator
+    /// is NOT `@Observable` — views read its output via the
+    /// `translate()` async call, not by observing internal state, so
+    /// the SwiftUI dependency graph doesn't need to track it.
+    @ObservationIgnored
+    lazy var lyricsTranslator: LyricsTranslator = LyricsTranslator()
+
+    /// Target language for the lyrics-translation toggle. Persisted to
+    /// UserDefaults under `lyrics.translationLanguage`. Defaults to
+    /// "English" on first launch.
+    var translationLanguage: String = "English" {
+        didSet {
+            UserDefaults.standard.set(translationLanguage, forKey: LyricsTranslator.languageKey)
+        }
+    }
+
+    /// Whether the lyrics-translation toggle on the Now Playing lyrics
+    /// tab is engaged. Persisted under `lyrics.translationEnabled` so
+    /// the user's preference survives quit.
+    var lyricsTranslationEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(lyricsTranslationEnabled, forKey: LyricsTranslator.enabledKey)
+        }
+    }
+
     /// Which source seeds the next-presented New Playlist sheet.
     /// Default is the historical behavior (add current tvamsrack); the
     /// "Save queue" button on the Up Next pane flips this to `.queue`
@@ -269,6 +296,18 @@ final class AppEnvironment {
         // we can distinguish "absent" from "explicitly set to false".
         if let stored = UserDefaults.standard.object(forKey: Self.menuBarExtraEnabledKey) as? Bool {
             self.menuBarExtraEnabled = stored
+        }
+        // Lyrics-translation preferences (B3). Read via `object(forKey:)`
+        // so an absent key (first launch) doesn't shadow the property's
+        // default value. Setting via the property's `didSet` would
+        // re-persist; we go around it by assigning directly to avoid
+        // a no-op write on every launch.
+        if let lang = UserDefaults.standard.string(forKey: LyricsTranslator.languageKey),
+           !lang.isEmpty {
+            self.translationLanguage = lang
+        }
+        if let toggle = UserDefaults.standard.object(forKey: LyricsTranslator.enabledKey) as? Bool {
+            self.lyricsTranslationEnabled = toggle
         }
         // Publish ourselves as the process-wide handle for AppIntents.
         // RiffApp creates exactly one AppEnvironment; if that ever

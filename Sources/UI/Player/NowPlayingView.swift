@@ -18,6 +18,13 @@ struct NowPlayingView: View {
     /// extrapolates `(now - anchorAt) + anchorElapsed`.
     @State private var anchorElapsed: Double = 0
     @State private var anchorAt: Date = Date()
+    /// Cached translation for the current track + language. Reset
+    /// whenever either changes. Held in view state (not env) so the
+    /// view re-renders when the translation lands; the translator's
+    /// own cache is the persistence layer across track switches.
+    @State private var translation: LyricsTranslator.Translation? = nil
+    @State private var translationLoading: Bool = false
+    @State private var translationError: String? = nil
 
     enum BottomTab: String, CaseIterable, Identifiable {
         case upNext = "Up Next"
@@ -851,10 +858,12 @@ struct NowPlayingView: View {
 
     private var lyricsContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // "Create card" only when there's something to put on a card.
+            // Translate toggle + "Create card" share a header row.
+            // Both surfaces only render when there are lyrics to act on.
             if !env.player.lyricsLoading,
                (!env.player.lyricsLines.isEmpty || (env.player.lyrics?.isEmpty == false)) {
-                HStack {
+                HStack(spacing: 12) {
+                    translationToolbar
                     Spacer()
                     Button {
                         env.isLyricCardSheetPresented = true
@@ -879,15 +888,205 @@ struct NowPlayingView: View {
                 } else if env.player.lyricsTimed && !env.player.lyricsLines.isEmpty {
                     syncedLyrics
                 } else if let text = env.player.lyrics, !text.isEmpty {
-                    Text(text)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineSpacing(5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                    plainLyricsWithTranslation(text)
                 } else {
                     emptyHint("Lyrics not available for this track.")
                 }
+            }
+        }
+        // Reset + refire when the source track or target language
+        // changes. The translator's own cache means re-firing is
+        // usually free (cache hit, instant return); the @State here
+        // just keeps the UI in sync.
+        .onChange(of: env.player.currentTrack?.videoId) { _, _ in
+            translation = nil
+            translationError = nil
+            if env.lyricsTranslationEnabled { fireTranslateIfNeeded() }
+        }
+        .onChange(of: env.translationLanguage) { _, _ in
+            translation = nil
+            translationError = nil
+            if env.lyricsTranslationEnabled { fireTranslateIfNeeded() }
+        }
+        .onChange(of: env.lyricsTranslationEnabled) { _, newValue in
+            if newValue { fireTranslateIfNeeded() } else {
+                // Toggling off doesn't drop the cache — flipping back
+                // on should be free. Just hide.
+                translation = nil
+                translationError = nil
+            }
+        }
+        // Lyrics often land asynchronously after the tab opens — if
+        // translation is enabled at that moment, fire as soon as the
+        // first batch of lines arrives.
+        .onChange(of: env.player.lyricsLines.count) { _, _ in
+            if env.lyricsTranslationEnabled, translation == nil {
+                fireTranslateIfNeeded()
+            }
+        }
+        .onAppear {
+            if env.lyricsTranslationEnabled { fireTranslateIfNeeded() }
+        }
+    }
+
+    /// Translation toolbar: a single toggle when AI is configured, a
+    /// hint pointing to Settings otherwise. The picker for the target
+    /// language lives in Settings (B3 spec) so users don't relitigate
+    /// the choice on every song.
+    @ViewBuilder
+    private var translationToolbar: some View {
+        if env.hasLLMAPIKey {
+            HStack(spacing: 8) {
+                Toggle(isOn: Binding(
+                    get: { env.lyricsTranslationEnabled },
+                    set: { env.lyricsTranslationEnabled = $0 }
+                )) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "character.bubble")
+                            .font(.system(size: 11))
+                        Text("Translate")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("(\(env.translationLanguage))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(Theme.red)
+                .help("Translate lyrics line-by-line via Claude. Change target language in Settings → AI features.")
+                if translationLoading {
+                    ProgressView().controlSize(.small)
+                }
+            }
+        } else {
+            Button {
+                env.isSettingsSheetPresented = true
+            } label: {
+                Label("Translate — configure API key in Settings",
+                      systemImage: "character.bubble")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.white.opacity(0.6))
+            .help("Add an Anthropic API key in Settings → AI features to unlock lyric translation.")
+        }
+    }
+
+    /// Plain-text (non-timed) lyrics with optional per-line translation
+    /// rendered beneath each source line. We render line-by-line — even
+    /// for the plain case — so each translation slot can carry its own
+    /// optional pronunciation row.
+    @ViewBuilder
+    private func plainLyricsWithTranslation(_ text: String) -> some View {
+        let sourceLines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(sourceLines.enumerated()), id: \.offset) { idx, line in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line.isEmpty ? "♪" : line)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                    translatedSubtitle(at: idx)
+                }
+            }
+        }
+        .lineSpacing(5)
+    }
+
+    /// Optional translated subtitle for a given source-line index.
+    /// Renders nothing when translation is off, errored, or the index
+    /// is out of range of what the model returned.
+    @ViewBuilder
+    private func translatedSubtitle(at idx: Int) -> some View {
+        if env.lyricsTranslationEnabled,
+           let lines = translation?.lines,
+           idx < lines.count {
+            let entry = lines[idx]
+            if !entry.translated.isEmpty || (entry.pronunciation?.isEmpty == false) {
+                VStack(alignment: .leading, spacing: 1) {
+                    if let pron = entry.pronunciation, !pron.isEmpty {
+                        Text(pron)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .textSelection(.enabled)
+                    }
+                    if !entry.translated.isEmpty {
+                        Text(entry.translated)
+                            .font(.system(size: 12, weight: .regular))
+                            .italic()
+                            .foregroundStyle(Theme.red.opacity(0.9))
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.leading, 4)
+            }
+        }
+        if env.lyricsTranslationEnabled, idx == 0, let err = translationError {
+            Text(err)
+                .font(.system(size: 11))
+                .foregroundStyle(.red.opacity(0.85))
+                .padding(.top, 2)
+        }
+    }
+
+    /// Kick off a translation request for the current track + language
+    /// using whatever lyric lines we have. Idempotent against the
+    /// translator's cache; safe to call from multiple .onChange hooks.
+    private func fireTranslateIfNeeded() {
+        guard env.lyricsTranslationEnabled, env.hasLLMAPIKey else { return }
+        guard let track = env.player.currentTrack else { return }
+        // Prefer the structured `lyricsLines` (timed or not) so we
+        // match the renderer's index space; fall back to splitting the
+        // plain-text blob the same way `plainLyricsWithTranslation`
+        // does so indices line up.
+        let lines: [String]
+        if !env.player.lyricsLines.isEmpty {
+            lines = env.player.lyricsLines.map(\.text)
+        } else if let text = env.player.lyrics, !text.isEmpty {
+            lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        } else {
+            return
+        }
+        let videoId = track.videoId
+        let language = env.translationLanguage
+        // Cache hit — render synchronously without flickering loader.
+        if let hit = env.lyricsTranslator.cached(videoId: videoId, language: language) {
+            translation = hit
+            translationError = nil
+            translationLoading = false
+            return
+        }
+        translationLoading = true
+        translationError = nil
+        let translator = env.lyricsTranslator
+        Task { @MainActor in
+            do {
+                let result = try await translator.translate(
+                    videoId: videoId,
+                    language: language,
+                    lines: lines
+                )
+                // Only commit if the track + language are still the
+                // same — the user may have skipped while we waited.
+                guard env.player.currentTrack?.videoId == videoId,
+                      env.translationLanguage == language else {
+                    translationLoading = false
+                    return
+                }
+                translation = result
+                translationLoading = false
+            } catch let err as LLMError {
+                translationError = err.errorDescription ?? "Translation failed."
+                translationLoading = false
+            } catch LyricsTranslator.ParseError.noJSONArray {
+                translationError = "Couldn't parse the model's response."
+                translationLoading = false
+            } catch {
+                translationError = "Translation failed: \(error.localizedDescription)"
+                translationLoading = false
             }
         }
     }
@@ -952,21 +1151,27 @@ struct NowPlayingView: View {
         let display = line.text.isEmpty ? "♪" : line.text
         let inactiveOpacity: Double = abs(idx - activeIndex) <= 1 ? 0.7 : 0.4
 
-        Group {
-            if isActive {
-                let progress = LyricsKaraoke.lineProgress(
-                    elapsedMs: elapsedMs, idx: idx, in: lines
-                )
-                KaraokeLineView(text: display, progress: progress)
-                    .font(.system(size: 14, weight: .semibold))
-            } else {
-                Text(display)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(inactiveOpacity))
+        VStack(alignment: .leading, spacing: 2) {
+            Group {
+                if isActive {
+                    let progress = LyricsKaraoke.lineProgress(
+                        elapsedMs: elapsedMs, idx: idx, in: lines
+                    )
+                    KaraokeLineView(text: display, progress: progress)
+                        .font(.system(size: 14, weight: .semibold))
+                } else {
+                    Text(display)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(inactiveOpacity))
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            // Inline translation + optional pronunciation, indented
+            // slightly so the source line still reads as the "primary"
+            // text. Renders nothing when translation is off / loading.
+            translatedSubtitle(at: idx)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .textSelection(.enabled)
         .contentShape(Rectangle())
         .onTapGesture {
             seekToLyric(at: idx)
