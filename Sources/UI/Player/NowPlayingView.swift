@@ -77,7 +77,18 @@ struct NowPlayingView: View {
             .ignoresSafeArea()
         }
         .preferredColorScheme(.dark)
-        .onExitCommand { env.player.isFullPlayerOpen = false }
+        .onExitCommand {
+            // Closing Now Playing must drop video back to audio-only so
+            // the architectural rule holds by default on next open.
+            env.player.isVideoVisible = false
+            env.player.isFullPlayerOpen = false
+        }
+        .onDisappear {
+            // Belt-and-suspenders: if we're being dismissed by some
+            // path other than the close button / ESC (e.g. the parent
+            // ZStack switching branches), still drop the video pane.
+            env.player.isVideoVisible = false
+        }
         .onChange(of: bottomTab) { _, newTab in
             if newTab == .lyrics { env.player.loadLyricsIfNeeded() }
             if newTab == .related { env.player.loadRelatedIfNeeded() }
@@ -95,6 +106,7 @@ struct NowPlayingView: View {
     private var topBar: some View {
         HStack {
             Button {
+                env.player.isVideoVisible = false
                 env.player.isFullPlayerOpen = false
             } label: {
                 HStack(spacing: 6) {
@@ -113,17 +125,49 @@ struct NowPlayingView: View {
             .keyboardShortcut(.cancelAction)
 
             Spacer()
-            Text("Now Playing")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
-                .textCase(.uppercase)
-                .tracking(1.2)
+            audioVideoToggle
             Spacer()
-            // Symmetry placeholder.
+            // Symmetry placeholder, sized like the Close button so the
+            // toggle reads centered.
             Color.clear.frame(width: 88, height: 32)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
+    }
+
+    /// Pill toggle that swaps the left column between the static
+    /// artwork (Song) and the live music video (Video). The scoped
+    /// exception to the WebView-never-visible rule lives here — see
+    /// the leftPlayer comments and CLAUDE.md.
+    private var audioVideoToggle: some View {
+        HStack(spacing: 0) {
+            toggleSegment(label: "Song", on: !env.player.isVideoVisible) {
+                env.player.isVideoVisible = false
+            }
+            toggleSegment(label: "Video", on: env.player.isVideoVisible) {
+                env.player.isVideoVisible = true
+            }
+        }
+        .background(Color.white.opacity(0.08))
+        .clipShape(Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        .help(env.player.isVideoVisible
+              ? "Switch to audio-only artwork view"
+              : "Show the official music video")
+    }
+
+    private func toggleSegment(label: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(on ? .white : .white.opacity(0.6))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(on ? Theme.red : Color.clear)
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Left column (artwork + title + scrubber + transport)
@@ -132,16 +176,7 @@ struct NowPlayingView: View {
         let track = env.player.currentTrack
         return VStack(spacing: 22) {
             Spacer(minLength: 8)
-            AsyncImage(url: track?.thumbnailURL) { phase in
-                switch phase {
-                case .success(let img): img.resizable().aspectRatio(contentMode: .fit)
-                default: Color.white.opacity(0.06)
-                }
-            }
-            .frame(width: 320, height: 320)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
-            .contextMenu { nowPlayingMenuItems }
+            heroMedia(track: track)
 
             VStack(spacing: 4) {
                 Text(track?.title ?? "—")
@@ -165,6 +200,41 @@ struct NowPlayingView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Hero media — either the static artwork (default) or the live
+    /// WKWebView showing the music video. The toggle is the one scoped
+    /// exception to CLAUDE.md's WebView-never-visible rule: video lives
+    /// only inside this Now Playing pane, only when the user opts in,
+    /// and reverts to artwork on dismiss. Sized at 16:9 when video is
+    /// on (matching the YT player aspect), square when on artwork.
+    @ViewBuilder
+    private func heroMedia(track: PlayerBridge.Track?) -> some View {
+        if env.player.isVideoVisible {
+            VideoPaneView(
+                webView: env.player.hostedWebView,
+                onDismantle: { [env] in env.player.reattachWebViewOffscreen() }
+            )
+            .frame(width: 480, height: 270)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+            )
+            .contextMenu { nowPlayingMenuItems }
+        } else {
+            AsyncImage(url: track?.thumbnailURL) { phase in
+                switch phase {
+                case .success(let img): img.resizable().aspectRatio(contentMode: .fit)
+                default: Color.white.opacity(0.06)
+                }
+            }
+            .frame(width: 320, height: 320)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.6), radius: 26, y: 10)
+            .contextMenu { nowPlayingMenuItems }
+        }
     }
 
     // MARK: - Right column (Up Next / Lyrics / Related side pane)
