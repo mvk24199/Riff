@@ -9,6 +9,11 @@ import SwiftUI
 struct ThumbnailButton: View {
     @Environment(AppEnvironment.self) private var env
     let item: MediaItem
+    /// When true, the context menu includes a Pin / Unpin row that
+    /// floats the item to the top of the Library section grid. Only
+    /// the Library tab passes `true` — Home / Search / Explore tiles
+    /// don't get pinning since the concept is library-scoped.
+    var showPinAction: Bool = false
 
     @State private var hovering: Bool = false
 
@@ -20,7 +25,7 @@ struct ThumbnailButton: View {
                 // Mirror YT Music: songs get the full track menu
                 // (Play / Start radio / Play next / Add to queue /
                 // Go to album / Go to artist / Add to playlist).
-                .contextMenu { TrackContextMenu(item: item) }
+                .contextMenu { TrackContextMenu(item: item, showPinAction: showPinAction) }
         } else {
             NavigationLink(value: item) { content }
                 .buttonStyle(.plain)
@@ -31,6 +36,12 @@ struct ThumbnailButton: View {
                     Button("Play") { Task { await playDirect() } }
                     if item.kind == .album || item.kind == .artist || item.kind == .podcast {
                         Button("Start radio") { Task { await playDirect() } }
+                    }
+                    if showPinAction {
+                        Divider()
+                        Button(env.isPinned(item.id) ? "Unpin from top" : "Pin to top") {
+                            env.togglePinned(id: item.id)
+                        }
                     }
                 }
         }
