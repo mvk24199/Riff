@@ -43,7 +43,32 @@ final class PlayerBridge {
     private(set) var liked: Bool = false
     /// Whether the full-screen Now Playing view is presented.
     var isFullPlayerOpen: Bool = false
+    /// Whether the audio-to-video toggle on Now Playing is engaged.
+    /// When true, NowPlayingView reparents the hidden WKWebView into a
+    /// discrete pane so the user sees the official music video; audio
+    /// continues from the same video element so toggling is seamless.
+    /// The architectural rule still holds — the WebView is only ever
+    /// visible inside this opt-in player pane, and flipping this back
+    /// to false (or closing Now Playing) reattaches the WebView to the
+    /// offscreen 1x1 window. Defaults off so the rule holds without
+    /// user action.
+    var isVideoVisible: Bool = false
     var hasTrack: Bool { currentTrack != nil }
+
+    /// The hidden WKWebView that drives audio. Exposed only so the
+    /// NowPlayingView's video pane can host it inside an
+    /// NSViewRepresentable when the user toggles video on. Do NOT
+    /// surface this on any other view — see CLAUDE.md's architectural
+    /// rule.
+    var hostedWebView: WKWebView { webBridge.webView }
+
+    /// Hand the WKWebView back to the offscreen window. Called by the
+    /// video pane in its dismantleNSView, and by anywhere we need to
+    /// ensure the WebView is invisible again (closing Now Playing,
+    /// toggling video off).
+    func reattachWebViewOffscreen() {
+        webBridge.reattachToOffscreenWindow()
+    }
 
     /// Cached browse IDs from /next response — used to lazy-load lyrics
     /// and related songs only when the user opens those tabs.
