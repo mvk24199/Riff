@@ -74,14 +74,24 @@ The CLAUDE.md architectural rule still holds: WKWebView is audio-only and invisi
 - [ ] **D8. Drag-to-reorder Up Next** — SwiftUI onMove on the upNext list.
 - [ ] **D9. EQ presets** — BiquadFilterNode chain in the existing Web Audio graph we built for volume normalization; ship 5-6 presets.
 
-### Skip list (explicit non-goals)
+### Tier E: Previously-skipped, user-reopened (scope-with-blockers)
 
-- Blend / Jam / Friend Activity (Spotify social) — requires identity + server infrastructure incompatible with no-telemetry rule.
-- Samples vertical short-video feed — awkward UX on a 27 inch Mac display; horizontal "Discover clips" carousel covers the value.
-- Background notifications for new releases — until we have a background-refresh story.
-- Local file playback — large scope; defer to Phase 4.
-- Beat-matched AutoMix and karaoke vocal attenuation — need raw audio access WKWebView hides from us.
-- Public timestamped comments — no comment graph exists for YT tracks.
+User reopened these on 2026-06-18 after they had been initially deferred. Each one has a real blocker; the scope below is what we CAN realistically ship within Riff's constraints (no audio extraction, no telemetry server, no Premium paywall data).
+
+- [ ] **E1. Blend / Jam / Friend Activity** — full implementation needs identity + a sync server (incompatible with no-telemetry rule). **Scoped target:** local-network co-listening over Bonjour. Two Riff instances on the same Wi-Fi can discover each other, share an Up Next queue, and one drives playback for both (the other mirrors via the local-web Remote primitive — depends on D5). A "Friend Activity" rail surfaces who is currently listening on the LAN. No cloud, no identity beyond a per-instance display name.
+- [ ] **E2. Samples vertical short-video feed** — full vertical-TikTok UX is awkward on a 27" Mac display. **Scoped target:** a "Discover clips" horizontal rail on the Explore tab — same data source (30-second music-video previews from /next continuations), but laid out as a horizontal carousel with autoplay-on-hover. Tap to play the full song; star to add to a Discover playlist. Keep the swipeable-card variant behind a Settings toggle for the users who DO want full vertical.
+- [ ] **E3. Background "new release" notifications** — macOS doesn't run our process in the background without a LaunchAgent (which has user-trust implications). **Scoped target:** foreground-only refresh — when Riff is running, poll subscribed-artists once an hour and post a UserNotification for any release dated in the last 24h. No background daemon. Document the trade-off (must keep Riff open to receive) in the Settings toggle copy.
+- [ ] **E4. Local file playback** — large scope (file picker, indexer, mixed queue, metadata extraction, format support). **Scoped first cut:** drag-and-drop a single file onto the player to play it via a separate AVPlayer (NOT the WKWebView audio path). No library indexing yet. Mixed queue (local + YT in same Up Next) is deferred until format coverage settles. ID3 tag extraction via AVAsset for the Now Playing strip.
+- [ ] **E5. Crossfade between tracks (covers part of "AutoMix")** — beat-matched AutoMix needs raw audio WKWebView hides; vocal attenuation for karaoke needs DSP on raw audio. **Scoped target:** the JS-side volume crossfade already in B8. Track this as the realistic delivery; mark beat-match + vocal attenuation as permanently blocked by the architectural rule. If a future re-architecture surfaces raw audio (e.g., InnerTube returns a direct stream URL), revisit then.
+- [ ] **E6. Personal timestamped annotations on tracks** — public-track-wide comments require a server graph we don't run, and YT doesn't expose its own comment graph for arbitrary tracks via InnerTube. **Scoped target:** PRIVATE timestamped notes per track ("the drop", "use for intro"), stored locally per videoId. Renders as small markers on the scrubber. Personal-only — no sharing, no public surface.
+
+Each E-item carries a real trade-off in its scope statement — the Ralph agent picking these up should respect those scopes and not try to ship the full-fat version that the original Skip-list entry rejected.
+
+### Permanently blocked (no realistic scope under current architecture)
+
+- **Beat-matched AutoMix** — needs raw audio access (time-stretch, beat detection). WKWebView's `<video>` element exposes volume control only. Re-evaluate if we ever stop using the WebView as the audio engine.
+- **Vocal attenuation in karaoke mode** — same underlying constraint (DSP on raw PCM). The Lyrics tab still ships a karaoke surface (B2) without the vocal-pull-down.
+- **Public comments on YT tracks** — no source. We don't run a server with a comment graph; YT's own comment data isn't exposed via InnerTube for music tracks (only for the video twin, and not via any of the endpoints we currently call). Personal annotations (E6) are the achievable alternative.
 
 ## Sequencing recommendation
 
