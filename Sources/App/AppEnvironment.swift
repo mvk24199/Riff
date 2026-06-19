@@ -387,13 +387,33 @@ final class AppEnvironment {
         // change. NowPlayingCenter holds a strong ref to player; here we go
         // the other way without retaining nowPlaying strongly inside player.
         self.player.onUpdate = { [weak self] in
-            guard let self, let track = self.player.currentTrack else { return }
+            guard let self else { return }
+            guard let track = self.player.currentTrack else {
+                // No active track — wipe the widget snapshot so it
+                // doesn't keep advertising the last-played song after
+                // the user stops playback.
+                NowPlayingSnapshotWriter.shared.clear()
+                return
+            }
             self.nowPlaying.update(
                 title: track.title,
                 artist: track.subtitle,
                 artwork: track.thumbnailURL,
                 duration: self.player.duration,
                 elapsed: self.player.elapsed
+            )
+            // B9 — mirror the same payload into the App-Group-shared
+            // snapshot the Notification Center widget reads. The
+            // writer rate-limits internally so this stays cheap on
+            // the ~250ms progress tick.
+            NowPlayingSnapshotWriter.shared.update(
+                videoId: track.videoId,
+                title: track.title,
+                subtitle: track.subtitle,
+                thumbnailURL: track.thumbnailURL,
+                isPlaying: self.player.isPlaying,
+                elapsed: self.player.elapsed,
+                duration: self.player.duration
             )
         }
         // Hand PlayerBridge the predicate it uses to filter blocked
@@ -402,6 +422,40 @@ final class AppEnvironment {
         // nothing" via the default initializer.
         self.player.shouldBlock = { [weak self] item in
             self?.isBlocked(item) ?? false
+        }
+
+        // B9 — drain any widget command that landed while the app was
+        // backgrounded. The widget's transport buttons enqueue a
+        // pending command into the shared App Group defaults and set
+        // openAppWhenRun=true, which foregrounds us. We catch the
+        // foreground transition here and dispatch.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.drainWidgetCommands() }
+        }
+        // Also drain on launch — first foreground after the system
+        // routes the AppIntent to a freshly-launched process may
+        // arrive before didBecomeActive fires.
+        Task { @MainActor [weak self] in
+            self?.drainWidgetCommands()
+        }
+    }
+
+    // Pull any queued widget command off the shared store and route
+    // it to PlayerBridge. Safe to call repeatedly — dequeue clears
+    // the pending field so the second call is a no-op.
+    private func drainWidgetCommands() {
+        guard let command = WidgetCommandStore.dequeue() else { return }
+        switch command {
+        case .togglePlay:
+            Task { await self.player.togglePlay() }
+        case .next:
+            Task { await self.player.next() }
+        case .previous:
+            Task { await self.player.previous() }
         }
     }
 }
