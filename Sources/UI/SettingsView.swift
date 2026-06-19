@@ -60,6 +60,8 @@ struct SettingsView: View {
                     Divider().background(Theme.divider)
                     playbackSection
                     Divider().background(Theme.divider)
+                    interfaceSection
+                    Divider().background(Theme.divider)
                     libraryAccessSection
                     Divider().background(Theme.divider)
                     aiFeaturesSection
@@ -192,6 +194,33 @@ struct SettingsView: View {
                     set: { newValue in
                         Task { await env.player.setNormalizationEnabled(newValue) }
                     }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+            }
+        }
+    }
+
+    /// Interface preferences. Currently just the menu-bar mini player
+    /// toggle; expects to grow as we add more chrome-level options
+    /// (window-on-quit behavior, accent-color, dock-icon hiding).
+    private var interfaceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Interface")
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Menu bar mini player")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                    Text("Show a compact playback popover next to the system clock. Click the music-note icon for transport controls and a quick way to open the floating Mini Player window.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Toggle("", isOn: Binding(
+                    get: { env.menuBarExtraEnabled },
+                    set: { env.menuBarExtraEnabled = $0 }
                 ))
                 .toggleStyle(.switch)
                 .labelsHidden()
