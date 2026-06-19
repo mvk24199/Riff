@@ -415,10 +415,31 @@ final class PlayerBridge {
             // shadowing the QueueManager property name.)
             var fetched = response.queue
             if fetched.count <= 1, let plid = playlistId, !plid.isEmpty {
-                if let detail = try? await innerTube.playlistDetail(playlistId: plid) {
+                // Fallback A: real playlist id (PL… / OLAK5uy_…) — fetch
+                // its track list directly. Not applicable for auto-radio
+                // RDAMVM<videoId> ids (YT doesn't expose them via /browse).
+                if !plid.hasPrefix("RDAMVM"),
+                   let detail = try? await innerTube.playlistDetail(playlistId: plid) {
                     if Task.isCancelled { return }
                     Log.bridge.debug("refreshNextQueue: fallback to playlistDetail \(plid, privacy: .public) → \(detail.tracks.count) tracks")
                     fetched = detail.tracks
+                }
+            }
+            // Fallback B: /next came back thin AND we have a related
+            // browseId for the current track — use related songs to
+            // seed Up Next so a single-track click doesn't leave the
+            // queue empty. Common for regional / long-tail tracks
+            // where YT's auto-radio is sparse. We synthesize a
+            // current-track entry at the head so the merge step
+            // below still has a valid curId anchor.
+            if fetched.count <= 1, let relatedId = response.relatedBrowseId {
+                if let relatedItems = try? await innerTube.related(browseId: relatedId), !relatedItems.isEmpty {
+                    if Task.isCancelled { return }
+                    Log.bridge.debug("refreshNextQueue: fallback to related \(relatedId, privacy: .public) → \(relatedItems.count) tracks")
+                    // Preserve whatever /next told us about the current
+                    // track (typically a singleton entry at index 0),
+                    // then tack the related results on as the body.
+                    fetched = response.queue + relatedItems
                 }
             }
 
