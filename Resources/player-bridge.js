@@ -98,8 +98,47 @@
         },
 
         setVolume(level) {
-            const v = videoEl();
-            if (v) v.volume = Math.max(0, Math.min(1, level));
+            const clamped = Math.max(0, Math.min(1, level));
+            // Cache the user's target volume — every write to
+            // `<video>.volume` from this point forward multiplies it
+            // by the active crossfade factor (default 1.0), so the
+            // user's setVolume calls never fight an in-flight ramp.
+            // When no crossfade is in flight the factor is 1.0 and
+            // this is identical to a direct write. Falls back to a
+            // direct write if the crossfade module hasn't initialized
+            // yet (shouldn't happen — the IIFE wires both
+            // synchronously — but cheap to guard).
+            if (window.__riffXfade) {
+                window.__riffXfade.userVolume = clamped;
+                window.__riffXfade.applyVolume();
+            } else {
+                const v = videoEl();
+                if (v) v.volume = clamped;
+            }
+        },
+
+        // Crossfade between tracks (Tier 3 B8). `seconds` ∈ {0, 2, 4, 6, 8}.
+        // 0 disables the feature entirely (factor stays pinned to 1.0).
+        // The JS bridge handles both halves of the fade in one place:
+        //   - tail ramp: on `timeupdate`, when remaining < seconds we
+        //     linearly ramp the factor from 1.0 → 0.0
+        //   - head ramp: on the NEXT trackChanged after a tail ramp
+        //     started, we wall-clock ramp 0.0 → 1.0 over `seconds`
+        // Swift retains ownership of the user's chosen volume — see
+        // setVolume above; the crossfade factor multiplies, never
+        // overrides.
+        setCrossfadeSeconds(seconds) {
+            const n = Math.max(0, Math.min(30, Number(seconds) || 0));
+            if (!window.__riffXfade) return;
+            window.__riffXfade.seconds = n;
+            // Cancel any in-flight ramp if the user just turned
+            // crossfade off, so we don't leave audio half-faded.
+            if (n === 0) {
+                window.__riffXfade.cancelHeadRamp();
+                window.__riffXfade.factor = 1.0;
+                window.__riffXfade.tailFading = false;
+                window.__riffXfade.applyVolume();
+            }
         },
 
         // Approximate per-track loudness normalization. Routes the
@@ -317,6 +356,14 @@
         if (videoIdChanged && window.__riffNorm && window.__riffNorm.enabled) {
             window.__riffNorm.startMeasuring();
         }
+        // Crossfade head-ramp on a real track switch — the new track's
+        // <video> source is already swapped in by the time
+        // videodatachange fires, so this is the right moment to start
+        // ramping volume back up to the user's chosen level. Same
+        // dedup gate as normalization above.
+        if (videoIdChanged) {
+            try { window.__riffXfade.onTrackChange(); } catch (_) {}
+        }
         let artwork = null;
         if (md && md.artwork && md.artwork.length > 0) {
             artwork = md.artwork[md.artwork.length - 1].src;
@@ -400,6 +447,10 @@
         // decisions.
         v.addEventListener("timeupdate", () => {
             postEvent({ event: "progress", currentTime: v.currentTime, duration: v.duration });
+            // Crossfade tail-ramp lives here so it runs at the same
+            // ~4Hz the scrubber updates — accurate enough for a 2-8s
+            // ramp, and no separate timer to babysit.
+            try { window.__riffXfade.onTimeUpdate(v.currentTime, v.duration); } catch (_) {}
         });
     }
 
@@ -493,6 +544,142 @@
             });
         }
     }
+
+    // ---- Crossfade (Tier 3 B8) --------------------------------------------
+    //
+    // Volume-only crossfade between consecutive tracks. The architectural
+    // constraint we live under (single `<video>` element with MSE source-
+    // swap; no two simultaneous audio sources) rules out a true overlap
+    // crossfade in the Apple Music / AutoMix sense. What we ship instead:
+    //
+    //   - In the last N seconds of the current track, linearly ramp the
+    //     "crossfade factor" 1.0 → 0.0. The factor multiplies the user's
+    //     chosen volume in setVolume / applyVolume.
+    //   - On the next `videodatachange` (the new track's source is live),
+    //     wall-clock ramp the factor 0.0 → 1.0 over N seconds.
+    //
+    // Audible result: tail of track A fades out into head of track B
+    // fading in. Both halves use the same N seconds. No DSP, no overlap,
+    // no audio extraction — sits entirely inside the JS bridge.
+    //
+    // We never write to `<video>.volume` directly elsewhere — the user's
+    // setVolume above and this module are the only writers. Sleep
+    // timer's fade-out also writes via window.musicBridge.setVolume, so
+    // it composes correctly too (the JS-side factor is independent of
+    // the Swift-side user-volume cache).
+    const xfade = {
+        // User-chosen volume in [0, 1]. The Swift side calls setVolume
+        // on launch + every user volume change, which keeps this in
+        // sync. Initial 1.0 matches `<video>.volume`'s default.
+        userVolume: 1.0,
+        // Crossfade duration in seconds. 0 disables entirely.
+        seconds: 0,
+        // Multiplier in [0, 1]. Pinned at 1.0 outside an in-flight ramp.
+        factor: 1.0,
+        // True while the tail ramp is in flight on the current track.
+        // Consumed by the next videodatachange to decide whether to
+        // run the head ramp on the new track.
+        tailFading: false,
+        // Head-ramp interval id (setInterval); null when idle.
+        headRampId: null,
+        // Wall-clock millis at which the head ramp started; used to
+        // compute the head-ramp factor without depending on the new
+        // track's timeupdate cadence.
+        headRampStart: 0,
+
+        applyVolume() {
+            const v = videoEl();
+            if (!v) return;
+            const level = Math.max(0, Math.min(1, this.userVolume * this.factor));
+            v.volume = level;
+        },
+
+        // Called from the <video>.timeupdate handler. Reads currentTime
+        // / duration off the element and updates `factor` if we're
+        // inside the tail-fade window.
+        onTimeUpdate(currentTime, duration) {
+            const n = this.seconds;
+            if (!n || !isFinite(duration) || duration <= 0) return;
+            const remaining = duration - currentTime;
+            // Tail window: when remaining < n, start ramping.
+            // Guard against the early-seek case where currentTime
+            // briefly reads near duration during a seek to end —
+            // the YT auto-advance will fire shortly and reset.
+            if (remaining < n && remaining >= 0) {
+                this.tailFading = true;
+                // Linear ramp: factor = remaining / n.
+                // remaining = n → factor = 1.0
+                // remaining = 0 → factor = 0.0
+                this.factor = Math.max(0, Math.min(1, remaining / n));
+                this.applyVolume();
+            } else if (this.tailFading && remaining >= n) {
+                // User scrubbed backwards out of the tail window —
+                // restore full volume and clear the tail flag so we
+                // don't run a head ramp on the next track change
+                // we weren't really fading into.
+                this.tailFading = false;
+                this.factor = 1.0;
+                this.applyVolume();
+            }
+        },
+
+        // Called from videodatachange when a new videoId arrives.
+        // If we were mid-tail-fade, start ramping the new track up
+        // from current factor → 1.0 over `seconds`. If we weren't
+        // fading (e.g. user pressed Next manually), snap to 1.0 so
+        // the new track plays at full user-volume.
+        onTrackChange() {
+            if (!this.tailFading || this.seconds <= 0) {
+                // No tail fade was in flight — make sure factor is
+                // clean for the new track. Defends against the case
+                // where a previous tail fade ended at factor=0 and
+                // the track changed via a path that didn't go
+                // through onTrackChange (defensive).
+                this.cancelHeadRamp();
+                this.factor = 1.0;
+                this.applyVolume();
+                return;
+            }
+            this.tailFading = false;
+            this.startHeadRamp();
+        },
+
+        startHeadRamp() {
+            this.cancelHeadRamp();
+            const n = this.seconds;
+            if (n <= 0) {
+                this.factor = 1.0;
+                this.applyVolume();
+                return;
+            }
+            const startFactor = this.factor; // typically ~0 after tail
+            this.headRampStart = Date.now();
+            // 50ms tick — 20 Hz update is smooth without being
+            // wasteful, matches what a CSS animation would do
+            // visually. Auto-stops once elapsed >= n seconds.
+            this.headRampId = setInterval(() => {
+                const elapsedMs = Date.now() - this.headRampStart;
+                const totalMs = this.seconds * 1000;
+                const t = Math.min(1, elapsedMs / totalMs);
+                // Linear ramp from startFactor → 1.0 over `seconds`.
+                this.factor = startFactor + (1.0 - startFactor) * t;
+                this.applyVolume();
+                if (t >= 1) {
+                    this.factor = 1.0;
+                    this.applyVolume();
+                    this.cancelHeadRamp();
+                }
+            }, 50);
+        },
+
+        cancelHeadRamp() {
+            if (this.headRampId !== null) {
+                clearInterval(this.headRampId);
+                this.headRampId = null;
+            }
+        },
+    };
+    window.__riffXfade = xfade;
 
     // ---- Volume normalization (Web Audio RMS-based) ------------------------
     //
