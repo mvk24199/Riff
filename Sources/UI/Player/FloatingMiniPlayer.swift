@@ -39,7 +39,7 @@ struct FloatingMiniPlayerView: View {
                         .foregroundStyle(.white)
                     Text(track?.subtitle ?? "")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.white.opacity(0.75))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)

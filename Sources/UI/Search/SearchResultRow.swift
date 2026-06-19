@@ -119,7 +119,7 @@ struct SearchResultRow: View {
                     .lineLimit(1)
                 Text(formattedSubtitle)
                     .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)
             }
             Spacer(minLength: 12)

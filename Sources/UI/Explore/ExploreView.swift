@@ -77,7 +77,7 @@ private struct ExploreHeader: View {
                 .foregroundStyle(.white)
             Text("Charts, new releases, and moods worth a listen.")
                 .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(0.75))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

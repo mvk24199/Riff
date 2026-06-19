@@ -75,16 +75,27 @@ struct ThumbnailButton: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
+                .truncationMode(.tail)
                 .multilineTextAlignment(.leading)
 
             Text(item.subtitle)
                 .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(0.75))
                 .lineLimit(1)
+                .truncationMode(.tail)
         }
         .frame(width: 180, alignment: .leading)
         .scaleEffect(hovering ? 1.02 : 1.0)
         .animation(.easeOut(duration: 0.15), value: hovering)
+        // Truncated titles / subtitles still need to be readable. The
+        // system tooltip surfaces the full text on hover so long album
+        // or artist names aren't lost behind an ellipsis.
+        .help(tileTooltip)
+    }
+
+    private var tileTooltip: String {
+        if item.subtitle.isEmpty { return item.title }
+        return "\(item.title) — \(item.subtitle)"
     }
 
     private func playDirect() async {

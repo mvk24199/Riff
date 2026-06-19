@@ -183,7 +183,7 @@ struct SettingsView: View {
                         .foregroundStyle(.white)
                     Text("Smooths loudness between tracks by measuring each new track and adjusting gain toward a fixed target. Approximate — measured in-browser, not LUFS-accurate.")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.white.opacity(0.75))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 16)
@@ -410,12 +410,12 @@ struct SettingsView: View {
                         .font(.system(size: 14, weight: .semibold))
                     Text("Native macOS YouTube Music client • AGPL-3.0")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.white.opacity(0.75))
                 }
                 Spacer()
                 Text("v0.1.0")
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(.white.opacity(0.75))
             }
         }
     }
@@ -425,7 +425,7 @@ struct SettingsView: View {
             .font(.system(size: 11, weight: .semibold))
             .textCase(.uppercase)
             .tracking(1.2)
-            .foregroundStyle(.white.opacity(0.55))
+            .foregroundStyle(.white.opacity(0.75))
     }
 
     private func shortcutRow(_ label: String, keys: String) -> some View {
@@ -463,7 +463,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Setup")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.75))
                 .textCase(.uppercase)
                 .tracking(1.2)
 
@@ -503,7 +503,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("OAuth credentials")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.75))
                 .textCase(.uppercase)
                 .tracking(1.2)
             VStack(alignment: .leading, spacing: 6) {

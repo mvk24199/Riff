@@ -75,7 +75,7 @@ private struct GreetingHeader: View {
                 .foregroundStyle(.white)
             Text("Listen to anything, anywhere.")
                 .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(0.75))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -165,7 +165,7 @@ struct HomeSectionRow: View {
                 if let subtitle {
                     Text(subtitle)
                         .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.white.opacity(0.75))
                 }
             }
 
@@ -241,7 +241,7 @@ private struct QuickPickRow: View {
                         .lineLimit(1)
                     Text(item.subtitle)
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.white.opacity(0.75))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)

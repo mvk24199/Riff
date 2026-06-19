@@ -98,7 +98,7 @@ struct QueueBuilderSheet: View {
                 .font(.system(size: 11, weight: .semibold))
                 .textCase(.uppercase)
                 .tracking(1.2)
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.75))
             TextField("e.g. rainy Sunday morning, mellow indie folk", text: $prompt)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(build)
@@ -142,7 +142,7 @@ struct QueueBuilderSheet: View {
                     .font(.system(size: 11, weight: .semibold))
                     .textCase(.uppercase)
                     .tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
                 Spacer()
                 Button {
                     Task {
@@ -177,7 +177,7 @@ struct QueueBuilderSheet: View {
                     HStack(spacing: 10) {
                         Image(systemName: "music.note")
                             .frame(width: 18)
-                            .foregroundStyle(.white.opacity(0.5))
+                            .foregroundStyle(.white.opacity(0.75))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title)
                                 .font(.system(size: 13, weight: .medium))
