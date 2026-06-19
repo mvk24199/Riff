@@ -96,7 +96,7 @@ final class AppEnvironment {
     }
 
     /// Which source seeds the next-presented New Playlist sheet.
-    /// Default is the historical behavior (add current track); the
+    /// Default is the historical behavior (add current tvamsrack); the
     /// "Save queue" button on the Up Next pane flips this to `.queue`
     /// before raising `isNewPlaylistSheetPresented`.
     var newPlaylistSource: NewPlaylistSheet.Source = .currentTrack
