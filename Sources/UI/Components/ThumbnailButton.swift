@@ -82,14 +82,23 @@ struct ThumbnailButton: View {
                 }
             }
 
-            Text(item.title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .multilineTextAlignment(.leading)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(env.displayTitle(for: item))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                if env.hasMetadataOverride(item) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .help("Metadata edited locally")
+                        .accessibilityLabel("Metadata edited")
+                }
+            }
 
-            Text(item.subtitle)
+            Text(env.displaySubtitle(for: item))
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.75))
                 .lineLimit(1)
@@ -105,8 +114,10 @@ struct ThumbnailButton: View {
     }
 
     private var tileTooltip: String {
-        if item.subtitle.isEmpty { return item.title }
-        return "\(item.title) — \(item.subtitle)"
+        let title = env.displayTitle(for: item)
+        let subtitle = env.displaySubtitle(for: item)
+        if subtitle.isEmpty { return title }
+        return "\(title) — \(subtitle)"
     }
 
     private func playDirect() async {

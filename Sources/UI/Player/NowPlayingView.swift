@@ -213,12 +213,22 @@ struct NowPlayingView: View {
             heroMedia(track: track)
 
             VStack(spacing: 4) {
-                Text(track?.title ?? "—")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                Text(track?.subtitle ?? "")
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(displayedTitle(track: track))
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                    if let vid = track?.videoId,
+                       env.trackOverrides.hasOverride(for: vid) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .help("Metadata edited locally")
+                            .accessibilityLabel("Metadata edited")
+                    }
+                }
+                Text(displayedSubtitle(track: track))
                     .font(.system(size: 14))
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(1)
@@ -1616,11 +1626,20 @@ struct NowPlayingView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.title)
-                    .font(.system(size: 12, weight: isCurrent ? .semibold : .medium))
-                    .foregroundStyle(isCurrent ? Theme.red : .white)
-                    .lineLimit(1)
-                Text(item.subtitle)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(env.displayTitle(for: item))
+                        .font(.system(size: 12, weight: isCurrent ? .semibold : .medium))
+                        .foregroundStyle(isCurrent ? Theme.red : .white)
+                        .lineLimit(1)
+                    if env.hasMetadataOverride(item) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .help("Metadata edited locally")
+                            .accessibilityLabel("Metadata edited")
+                    }
+                }
+                Text(env.displaySubtitle(for: item))
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)
@@ -1641,6 +1660,38 @@ struct NowPlayingView: View {
         .padding(.vertical, 5)
         .background(isCurrent ? Theme.red.opacity(0.10) : Color.white.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// D2 — Now Playing big title routed through any per-videoId
+    /// override. Falls back to the original `track.title` (or em-dash
+    /// when there's no track at all).
+    private func displayedTitle(track: PlayerBridge.Track?) -> String {
+        guard let track else { return "—" }
+        return env.trackOverrides.overriddenTitle(for: track.videoId) ?? track.title
+    }
+
+    /// Now Playing subtitle ("Artist · Album · Year"). When an artist
+    /// or album override exists we splice the first one/two segments
+    /// to match how rows render elsewhere.
+    private func displayedSubtitle(track: PlayerBridge.Track?) -> String {
+        guard let track else { return "" }
+        let artist = env.trackOverrides.overriddenArtist(for: track.videoId)
+        let album = env.trackOverrides.overriddenAlbum(for: track.videoId)
+        if artist == nil && album == nil { return track.subtitle }
+        var segments = track.subtitle
+            .split(whereSeparator: { $0 == "·" || $0 == "•" })
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        if segments.isEmpty {
+            segments = ["", ""]
+        } else if segments.count == 1 {
+            segments.append("")
+        }
+        if let a = artist { segments[0] = a }
+        if let a = album, segments.count >= 2 { segments[1] = a }
+        while let last = segments.last, last.isEmpty {
+            segments.removeLast()
+        }
+        return segments.joined(separator: " · ")
     }
 
     private func emptyHint(_ text: String) -> some View {

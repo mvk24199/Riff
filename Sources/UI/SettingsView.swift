@@ -101,6 +101,10 @@ struct SettingsView: View {
                         Divider().background(Theme.divider)
                         blockedArtistsSection
                     }
+                    if !env.trackOverrides.sortedVideoIds.isEmpty {
+                        Divider().background(Theme.divider)
+                        trackOverridesSection
+                    }
                     Divider().background(Theme.divider)
                     aboutSection
                 }
@@ -840,6 +844,64 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 4)
             }
+        }
+    }
+
+    /// D2 — list of per-track metadata overrides. Hidden when empty
+    /// (gated on the call site). Per-row "Remove" plus a "Clear all"
+    /// action at the bottom so the section never traps the user with
+    /// dozens of accumulated overrides.
+    private var trackOverridesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("Track metadata overrides")
+            Text("Title / artist / album corrections you've applied to individual tracks. Local-only — nothing is sent to YouTube. To re-edit, right-click a track row anywhere in the app.")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.65))
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(env.trackOverrides.sortedVideoIds, id: \.self) { videoId in
+                if let override = env.trackOverrides.override(for: videoId) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            // Compact summary: prefer the override
+                            // title; fall back to the videoId if the
+                            // user only overrode artist or album.
+                            Text(override.title ?? override.artist ?? videoId)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.white)
+                            if let a = override.artist, override.title != nil {
+                                Text(a)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
+                            if let a = override.album {
+                                Text(a)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.65))
+                            }
+                            Text(videoId)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.45))
+                                .textSelection(.enabled)
+                        }
+                        Spacer()
+                        Button("Remove") {
+                            env.trackOverrides.clearOverride(videoId: videoId)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Clear all overrides", role: .destructive) {
+                    env.trackOverrides.clearAll()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.top, 4)
         }
     }
 

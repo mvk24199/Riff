@@ -86,6 +86,83 @@ final class AppEnvironment {
     }
     private static let menuBarExtraEnabledKey = "ui.menuBarExtraEnabled"
 
+    /// D2 — per-videoId on-device metadata overrides. Local-only;
+    /// never propagated to YouTube. UI rows render through the
+    /// `displayTitle(for:) / displayArtist(for:) / displayAlbum(for:)`
+    /// helpers below so the override applies everywhere with one
+    /// switch. @Observable so SwiftUI re-renders rows when a user
+    /// hits Save on the Edit-metadata sheet.
+    let trackOverrides: TrackOverrideStore
+
+    /// Returns the user-overridden title if one exists, else falls
+    /// back to the original. `videoId` is the song's id; for non-song
+    /// MediaItems the id is e.g. an album/playlist browseId and never
+    /// has an override.
+    func displayTitle(for item: MediaItem) -> String {
+        if item.kind == .song,
+           let t = trackOverrides.overriddenTitle(for: item.id) {
+            return t
+        }
+        return item.title
+    }
+
+    /// Returns the user-overridden artist if one exists. The artist
+    /// for a song row lives inside the `subtitle` field as the first
+    /// " · " or " • " segment ("Bruno Mars · 24K Magic · 2016"), so
+    /// when an override exists we splice it in place of that first
+    /// segment to keep the rest of the subtitle line (album, year)
+    /// intact. For non-song items, returns the original subtitle.
+    func displaySubtitle(for item: MediaItem) -> String {
+        guard item.kind == .song else { return item.subtitle }
+        let videoId = item.id
+        let artistOverride = trackOverrides.overriddenArtist(for: videoId)
+        let albumOverride = trackOverrides.overriddenAlbum(for: videoId)
+        if artistOverride == nil && albumOverride == nil {
+            return item.subtitle
+        }
+        // Split the subtitle into segments on " · " / " • ". The
+        // first segment is the artist; the second (if present) is
+        // the album; anything after that is year / view count and
+        // is preserved verbatim.
+        var segments = item.subtitle
+            .split(whereSeparator: { $0 == "·" || $0 == "•" })
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        // If subtitle was empty, synthesize a 2-segment line so we
+        // have somewhere to drop the artist/album.
+        if segments.isEmpty {
+            segments = ["", ""]
+        } else if segments.count == 1 {
+            segments.append("")
+        }
+        if let a = artistOverride { segments[0] = a }
+        if let a = albumOverride, segments.count >= 2 { segments[1] = a }
+        // Re-join with the unicode middle dot. Drop trailing empties
+        // so we don't render "Artist · ".
+        while let last = segments.last, last.isEmpty {
+            segments.removeLast()
+        }
+        return segments.joined(separator: " · ")
+    }
+
+    /// Direct accessor for the album-only override. Surfaced for
+    /// callers (DetailView, the Edit sheet itself) that already split
+    /// title / artist / album apart and don't want to round-trip
+    /// through `displaySubtitle`.
+    func displayAlbum(for videoId: String, fallback: String) -> String {
+        trackOverrides.overriddenAlbum(for: videoId) ?? fallback
+    }
+
+    /// Whether any override field is set for `item`. Drives the small
+    /// "edited" pencil glyph on rows.
+    func hasMetadataOverride(_ item: MediaItem) -> Bool {
+        item.kind == .song && trackOverrides.hasOverride(for: item.id)
+    }
+
+    /// Drives the "Edit metadata" sheet from TrackContextMenu.
+    /// When set non-nil, RootView raises the sheet pre-populated
+    /// with this item's current (possibly already-overridden) values.
+    var trackBeingEdited: MediaItem? = nil
+
     /// Lazy LLM provider. The provider type itself is stateless —
     /// secrets live in Keychain and are read fresh on every `chat()`
     /// call so a key rotation doesn't require rebuilding the provider.
@@ -362,6 +439,7 @@ final class AppEnvironment {
         self.innerTube = InnerTubeClient()
         self.player = PlayerBridge(innerTube: innerTube)
         self.nowPlaying = NowPlayingCenter(player: player)
+        self.trackOverrides = TrackOverrideStore()
         self.refreshSignedInState()
         self.loadBlockedArtists()
         self.loadPinnedLibrary()
