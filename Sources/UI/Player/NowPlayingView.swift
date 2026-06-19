@@ -931,10 +931,89 @@ struct NowPlayingView: View {
 
     private var relatedContent: some View {
         Group {
-            if env.player.related.isEmpty {
+            if env.player.related.isEmpty && env.player.relatedSections.isEmpty {
                 emptyHint("Looking for related tracks…")
             } else {
-                queueList(env.player.related)
+                VStack(alignment: .leading, spacing: 16) {
+                    // Surface "Other versions" / "Other performances" —
+                    // the live, acoustic, and cover variants of the
+                    // current track that YT Music already returns on
+                    // /next's Related tab. Previously dropped on the
+                    // floor by the flat scanForMediaItems pass; now
+                    // rendered as a horizontal rail above the related
+                    // queue so users can jump between performances of
+                    // the same song without leaving Now Playing.
+                    if let perfs = otherPerformancesSection {
+                        otherPerformancesRail(perfs)
+                    }
+                    if !env.player.related.isEmpty {
+                        queueList(env.player.related)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pick the "Other versions" / "Other performances" shelf from the
+    /// related sections by title match. YT Music uses both labels
+    /// depending on locale and content; the case-insensitive contains
+    /// check covers both without locking in a specific spelling.
+    private var otherPerformancesSection: HomeSection? {
+        for section in env.player.relatedSections {
+            let lower = section.title.lowercased()
+            if lower.contains("other version") || lower.contains("other performance") {
+                return section
+            }
+        }
+        return nil
+    }
+
+    /// Compact horizontal rail of variant tiles for the "Other
+    /// performances" row. Doesn't reuse HomeSectionRow because the
+    /// side pane is only ~380px wide — a Home-sized 180×180 carousel
+    /// would only fit two tiles. These tiles are 130×130 with a tight
+    /// caption so 3-4 read at once before scrolling.
+    private func otherPerformancesRail(_ section: HomeSection) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(section.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(section.items) { item in
+                        Button {
+                            Task { await env.player.play(item: item) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                AsyncImage(url: item.thumbnailURL) { phase in
+                                    if case .success(let img) = phase {
+                                        img.resizable().aspectRatio(contentMode: .fill)
+                                    } else {
+                                        Color.white.opacity(0.06)
+                                    }
+                                }
+                                .frame(width: 110, height: 110)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                Text(item.title)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(2)
+                                    .truncationMode(.tail)
+                                if !item.subtitle.isEmpty {
+                                    Text(item.subtitle)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.white.opacity(0.75))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                            }
+                            .frame(width: 110, alignment: .leading)
+                            .help("\(item.title) — \(item.subtitle)")
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu { TrackContextMenu(item: item) }
+                    }
+                }
             }
         }
     }
