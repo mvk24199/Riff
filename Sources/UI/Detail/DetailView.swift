@@ -142,6 +142,18 @@ struct DetailView: View {
                         .menuIndicator(.hidden)
                         .frame(width: 44)
                     }
+
+                    // Inline block/unblock button on Artist pages —
+                    // mirrors the entry in TrackContextMenu and
+                    // Settings → Library → Blocked Artists, but
+                    // saves two clicks for users who already know
+                    // they don't want to hear this artist again.
+                    // We surface it only for artist detail pages;
+                    // album/playlist pages already get block via
+                    // the per-track context menu.
+                    if item.kind == .artist {
+                        blockArtistButton(page: page)
+                    }
                 }
             }
             Spacer()
@@ -164,6 +176,44 @@ struct DetailView: View {
                 }
             )
         }
+    }
+
+    /// Inline "Don't recommend this artist" / "Recommend this artist
+    /// again" button rendered on Artist detail pages. The same action
+    /// lives in TrackContextMenu and Settings → Library → Blocked
+    /// Artists; surfacing it inline saves two clicks for a user who's
+    /// arrived on the artist page specifically because they no longer
+    /// want them in their rotation.
+    ///
+    /// Label and SF Symbol flip based on the current block state so
+    /// the button is also the unblock affordance — no need to dive
+    /// into Settings to undo a misclick. We prefer `page.title` for
+    /// the human-readable name because `item.title` can be stale
+    /// (e.g. arriving via "Go to artist" from a song row where the
+    /// artist name was a subtitle split that lost the full name).
+    @ViewBuilder
+    private func blockArtistButton(page: InnerTubeClient.DetailPage) -> some View {
+        let blocked = env.isBlocked(artistId: item.id)
+        Button {
+            if blocked {
+                env.unblockArtist(id: item.id)
+            } else {
+                let name = page.title.isEmpty ? item.title : page.title
+                env.blockArtist(id: item.id, name: name)
+            }
+        } label: {
+            Label(
+                blocked ? "Recommend Again" : "Don't Recommend",
+                systemImage: blocked ? "hand.thumbsup" : "hand.thumbsdown"
+            )
+            .font(.system(size: 13, weight: .semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.bordered)
+        .help(blocked
+              ? "Resume recommending this artist across Home, Search, and radio."
+              : "Hide this artist from Home, Search, and radio. Undo from Settings → Library.")
     }
 
     /// Renders the album / playlist tracklist. `fallbackArtwork` is used
