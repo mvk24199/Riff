@@ -6,9 +6,7 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<key>com.apple.security.application-groups</key>
-	<array>
-		<string>group.dev.riff.app</string>
-	</array>
+	<!-- See Sources/Riff.entitlements for why App Groups is commented
+	     out (free Apple Developer accounts can't provision them). -->
 </dict>
 </plist>
