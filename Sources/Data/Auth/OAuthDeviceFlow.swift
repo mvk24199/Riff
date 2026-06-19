@@ -144,7 +144,17 @@ final class OAuthDeviceFlow {
 
     private func pollForToken(deviceCode: String, interval: Int, expiresIn: Int) async {
         let deadline = Date().addingTimeInterval(TimeInterval(expiresIn))
-        while !Task.isCancelled, Date() < deadline {
+        // Belt-and-suspenders cap on top of the time-based `deadline`: if the
+        // network is flaky and `continue`s on every error, or Google returns
+        // `slow_down` repeatedly without ever resolving, we don't want to
+        // spin until `expiresIn`. Google's typical device-flow window is
+        // 1800s with a 5s interval → ~360 polls. Cap at 400 to leave headroom
+        // for `slow_down` backoff (which extends interval mid-flow) while
+        // still guaranteeing termination.
+        let maxAttempts = 400
+        var attempts = 0
+        while !Task.isCancelled, Date() < deadline, attempts < maxAttempts {
+            attempts += 1
             do {
                 try await Task.sleep(nanoseconds: UInt64(interval) * NSEC_PER_SEC)
             } catch { return }
@@ -216,7 +226,11 @@ final class OAuthDeviceFlow {
             return
         }
         if !Task.isCancelled {
-            state = .failure("Sign-in timed out. Please try again.")
+            if attempts >= maxAttempts {
+                state = .failure("Sign-in took too many attempts. Please try again.")
+            } else {
+                state = .failure("Sign-in timed out. Please try again.")
+            }
         }
     }
 

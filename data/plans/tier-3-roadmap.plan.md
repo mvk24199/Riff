@@ -24,7 +24,8 @@ The CLAUDE.md architectural rule still holds: WKWebView is audio-only and invisi
 
 ### Tier A: Ship next 2 weeks (P0 fixes + highest-leverage features)
 
-- [ ] **A1. P0 bug fixes** — force-unwraps on URL construction (PlayerBridge.swift:725, InnerTubeClient.swift:373-375), add 10s timeout to InnerTubeClient URLSession, max-attempts cap on OAuth Device Flow polling (OAuthDeviceFlow.swift:147).
+- [x] **A1. P0 bug fixes** — force-unwraps on URL construction (PlayerBridge.swift:725, InnerTubeClient.swift:373-375), add 10s timeout to InnerTubeClient URLSession, max-attempts cap on OAuth Device Flow polling (OAuthDeviceFlow.swift:147).
+  - note: Replaced both URL force-unwraps with safe `guard` fallbacks (home URL for player, `InnerTubeError.decoding` for Data API). Swapped `URLSession.shared` for a configured `URLSession` with 10s request / 30s resource timeouts; tests still inject custom sessions via `URLSession?` default. Added 400-attempt cap to OAuth polling loop with distinct timeout vs. max-attempts failure messages.
 - [ ] **A2. UX quick-wins batch** — help tooltips on icon-only buttons, bump secondary text contrast to opacity 0.75, restore menu-indicator automatic on dropdown buttons, ellipsis plus tooltip on tile subtitles, empty-state when search field cleared.
 - [ ] **A3. Sleep timer: fade-out + end-of-track modes** — extend existing timer with gentle 10s volume ramp to silence, and "stop after current track ends". Spotify still does not ship this on desktop.
 - [ ] **A4. Audio-to-Video toggle on Now Playing** — pill at top of Now Playing that swaps between audio-only and the official music video, preserving currentTime. YT Music's defining feature; currently hidden.

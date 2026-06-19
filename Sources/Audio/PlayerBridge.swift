@@ -722,7 +722,13 @@ final class PlayerBridge {
     }
 
     private func watchURL(videoId: String?, playlistId: String?) -> String {
-        var components = URLComponents(string: "https://music.youtube.com/watch")!
+        // The base string is a compile-time literal, but we still avoid the
+        // force-unwrap so a future typo can't crash on launch. Falling back
+        // to the home URL is preferable to `fatalError` — playback won't
+        // start, but the WebView stays alive and the user can recover.
+        guard var components = URLComponents(string: "https://music.youtube.com/watch") else {
+            return "https://music.youtube.com/"
+        }
         var items: [URLQueryItem] = []
         if let videoId, !videoId.isEmpty { items.append(URLQueryItem(name: "v", value: videoId)) }
         if let playlistId, !playlistId.isEmpty { items.append(URLQueryItem(name: "list", value: playlistId)) }
