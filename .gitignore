@@ -64,6 +64,7 @@ secrets/
 
 # Generated
 Riff.xcodeproj/
+.last-test-run.log
 
 # MetricKit crash + perf payloads. They live under
 # ~/Library/Application Support/Riff/diagnostics; this guard is for
