@@ -79,6 +79,13 @@ final class AppEnvironment {
     /// call so a key rotation doesn't require rebuilding the provider.
     /// Lazy so app launch stays fast for users who never touch AI
     /// features (no Keychain read on startup).
+    ///
+    /// @ObservationIgnored because @Observable can't synthesize
+    /// observation for `lazy var` (the macro rewrites property
+    /// access in a way that's incompatible with Swift's lazy
+    /// initialization). Provider identity never changes anyway,
+    /// so nothing to observe.
+    @ObservationIgnored
     lazy var llmProvider: any LLMProvider = AnthropicProvider()
 
     /// True when an Anthropic API key is configured. Drives the
