@@ -500,6 +500,14 @@ final class PlayerBridge {
                     item.id == curId || !self.shouldBlock(item)
                 }
                 self.queue.replaceQueue(visible)
+                // Push the new visible head into JS's pending-next URL
+                // so the next end-of-stream intercepts YT's autoplay
+                // with our choice. Without this, YT picks the next
+                // track from its internal queue — which can diverge
+                // from upNext after a related-songs fallback or block
+                // filter. Fire-and-forget; the JS bridge tolerates
+                // out-of-order updates.
+                Task { [weak self] in await self?.syncPendingNextURL() }
                 // Backfill the current track's album/artist IDs if /next
                 // returned them and the track we have on screen is missing
                 // them — common when the user clicks a carousel tile whose
@@ -569,6 +577,10 @@ final class PlayerBridge {
                     item.id == curId || !self.shouldBlock(item)
                 }
                 self.queue.replaceQueue(visible)
+                // Push the chip-mode head into the JS pending-next
+                // URL so end-of-stream navigates to OUR choice rather
+                // than YT's chip-context autoplay (which can diverge).
+                Task { [weak self] in await self?.syncPendingNextURL() }
                 // Refresh chip set: YT returns the same cloud back, but
                 // with a different chip's `isSelected=true`.
                 if !response.chips.isEmpty {
@@ -994,14 +1006,23 @@ final class PlayerBridge {
     /// treats as "clear" and falls back to YT's natural autoplay.
     private func syncPendingNextURL() async {
         let curId = currentTrack?.videoId
-        let head = upNext.first { userQueuedIds.contains($0.id) && $0.id != curId }
+        // Two-tier pending-head:
+        //   1. User-queued head — explicit user intent ("Play next" /
+        //      "Add to queue"). Highest priority, consumed on play.
+        //   2. Visible upNext head — what the user sees as "next song".
+        //      Pushing this URL means YT's natural autoplay-on-end is
+        //      intercepted by the JS-side onStateChange===0 handler,
+        //      which navigates to OUR choice instead of YT's. Without
+        //      this, YT picks the next song from its internal queue —
+        //      which can diverge from our visible upNext after any
+        //      /next refresh, related-songs fallback, or block filter.
+        let userHead = upNext.first { userQueuedIds.contains($0.id) && $0.id != curId }
+        let visibleHead = upNext.first { $0.id != curId }
+        let chosen = userHead ?? visibleHead
         let url: String
-        if let head {
-            // Use the same auto-radio playlist scheme as play(item:) so
-            // /next on the new track produces a proper radio queue
-            // instead of just the track itself.
-            let radio = Self.radioPlaylistId(for: head.id)
-            url = watchURL(videoId: head.id, playlistId: radio)
+        if let chosen {
+            let radio = Self.radioPlaylistId(for: chosen.id)
+            url = watchURL(videoId: chosen.id, playlistId: radio)
         } else {
             url = ""  // clear
         }
