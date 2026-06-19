@@ -3,6 +3,11 @@ import SwiftUI
 struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var sections: [HomeSection] = []
+    @State private var chips: [InnerTubeClient.HomeChip] = []
+    /// The chip currently filtering Home. `nil` means the default "All"
+    /// state — every chip pill renders unselected and the rails are the
+    /// untruncated FEmusic_home feed.
+    @State private var activeChip: InnerTubeClient.HomeChip?
     @State private var loading = true
     @State private var errorMessage: String?
 
@@ -17,6 +22,15 @@ struct HomeView: View {
                         ErrorBanner(message: errorMessage) {
                             Task { await load() }
                         }
+                    }
+                    if !chips.isEmpty {
+                        MoodChipRow(
+                            chips: chips,
+                            activeChip: activeChip,
+                            onSelect: { chip in
+                                Task { await applyChip(chip) }
+                            }
+                        )
                     }
                     if loading && sections.isEmpty {
                         HomeSkeleton()
@@ -39,21 +53,115 @@ struct HomeView: View {
         loading = true
         defer { loading = false }
         do {
-            let raw = try await env.innerTube.browseHome()
+            let feed = try await env.innerTube.browseHome()
+            chips = feed.chips
             // Filter blocked artists out of every carousel. We drop
             // empty sections too so a section that only contained
             // blocked artists doesn't render as a titled void.
-            sections = raw.compactMap { sec in
-                let kept = sec.items.filter { !env.isBlocked($0) }
-                guard !kept.isEmpty else { return nil }
-                return HomeSection(id: sec.id, title: sec.title, items: kept)
-            }
+            sections = Self.filterBlocked(feed.sections, env: env)
+            activeChip = nil
             errorMessage = nil
         } catch {
             errorMessage = LoadErrorPresenter.message(for: error, env: env)
             // Keep stale sections visible (if any) so the user can still
             // interact with them while the banner indicates the failure.
         }
+    }
+
+    /// Swap the rails to a chip-scoped feed (or back to the default
+    /// "All" state when the user taps the active chip again). We don't
+    /// re-fetch the chip list itself — chips are stable across filter
+    /// changes and a second fetch would just blink the row.
+    private func applyChip(_ chip: InnerTubeClient.HomeChip) async {
+        if activeChip == chip {
+            // Tap the active chip again to clear the filter.
+            do {
+                let feed = try await env.innerTube.browseHome()
+                sections = Self.filterBlocked(feed.sections, env: env)
+                activeChip = nil
+                errorMessage = nil
+            } catch {
+                errorMessage = LoadErrorPresenter.message(for: error, env: env)
+            }
+            return
+        }
+        do {
+            let raw = try await env.innerTube.browseHomeFiltered(chipParams: chip.params)
+            sections = Self.filterBlocked(raw, env: env)
+            activeChip = chip
+            errorMessage = nil
+        } catch {
+            errorMessage = LoadErrorPresenter.message(for: error, env: env)
+        }
+    }
+
+    @MainActor
+    private static func filterBlocked(_ raw: [HomeSection], env: AppEnvironment) -> [HomeSection] {
+        raw.compactMap { sec in
+            let kept = sec.items.filter { !env.isBlocked($0) }
+            guard !kept.isEmpty else { return nil }
+            return HomeSection(id: sec.id, title: sec.title, items: kept)
+        }
+    }
+}
+
+/// Horizontal scrolling row of mood / activity chips above the Home
+/// rails. Mirrors YT Music iOS's "Energize · Workout · Focus · Sleep"
+/// strip — single tap re-scopes Home, second tap on the active chip
+/// clears the filter. Active chip uses Theme.red as the fill so it
+/// reads as a deliberate selection rather than just a hover state.
+private struct MoodChipRow: View {
+    let chips: [InnerTubeClient.HomeChip]
+    let activeChip: InnerTubeClient.HomeChip?
+    let onSelect: (InnerTubeClient.HomeChip) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(chips) { chip in
+                    MoodChipPill(
+                        label: chip.label,
+                        isActive: chip == activeChip,
+                        action: { onSelect(chip) }
+                    )
+                }
+            }
+        }
+        .scrollClipDisabled()
+    }
+}
+
+private struct MoodChipPill: View {
+    let label: String
+    let isActive: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: isActive ? .semibold : .medium))
+                .foregroundStyle(isActive ? Color.black : .white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(isActive
+                              ? Theme.red
+                              : Color.white.opacity(hovering ? 0.12 : 0.06))
+                )
+                .overlay(
+                    Capsule()
+                        .strokeBorder(
+                            isActive ? Color.clear : Color.white.opacity(0.12),
+                            lineWidth: 1
+                        )
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(isActive ? "Tap to clear filter" : "Filter Home by \(label)")
     }
 }
 
