@@ -184,12 +184,20 @@ struct SkipNextIntent: AppIntent {
 // similar shortcuts can win the dispatch).
 struct RiffAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        // NOTE on parameter interpolation: `\(\.$query)` /
+        // `\(\.$artist)` inside a phrase template only compiles when
+        // the parameter type is AppEntity or AppEnum. For plain
+        // String parameters the phrase has to be parameter-less;
+        // Siri / Spotlight will prompt for the value conversationally
+        // once the phrase matches. Worth revisiting later by wrapping
+        // the query in an AppEntity if voice triggering with the
+        // song name inline becomes important.
         AppShortcut(
             intent: PlayTrackIntent(),
             phrases: [
-                "Play \(\.$query) on \(.applicationName)",
-                "Play \(\.$query) with \(.applicationName)",
-                "Play \(\.$query) in \(.applicationName)"
+                "Play a song on \(.applicationName)",
+                "Play music in \(.applicationName)",
+                "Search for a song on \(.applicationName)"
             ],
             shortTitle: "Play Song",
             systemImageName: "play.circle.fill"
@@ -197,9 +205,9 @@ struct RiffAppShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: PlayArtistRadioIntent(),
             phrases: [
-                "Start a radio station for \(\.$artist) on \(.applicationName)",
-                "Play \(\.$artist) radio on \(.applicationName)",
-                "Start \(\.$artist) radio in \(.applicationName)"
+                "Start a radio station on \(.applicationName)",
+                "Play artist radio on \(.applicationName)",
+                "Start artist radio in \(.applicationName)"
             ],
             shortTitle: "Artist Radio",
             systemImageName: "dot.radiowaves.left.and.right"
