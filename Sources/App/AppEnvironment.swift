@@ -74,6 +74,18 @@ final class AppEnvironment {
     /// of `isNewPlaylistSheetPresented` so the two can't collide.
     var isQueueBuilderSheetPresented: Bool = false
 
+    /// Whether the menu bar mini player (`MenuBarExtra` scene in
+    /// `RiffApp`) is inserted into the system menu bar. Defaults to
+    /// true; persisted to UserDefaults so the user's preference
+    /// survives quit. Mutating this property auto-persists and the
+    /// `MenuBarExtra` `.isInserted` binding reacts.
+    var menuBarExtraEnabled: Bool = true {
+        didSet {
+            UserDefaults.standard.set(menuBarExtraEnabled, forKey: Self.menuBarExtraEnabledKey)
+        }
+    }
+    private static let menuBarExtraEnabledKey = "ui.menuBarExtraEnabled"
+
     /// Lazy LLM provider. The provider type itself is stateless —
     /// secrets live in Keychain and are read fresh on every `chat()`
     /// call so a key rotation doesn't require rebuilding the provider.
@@ -251,6 +263,13 @@ final class AppEnvironment {
         self.nowPlaying = NowPlayingCenter(player: player)
         self.refreshSignedInState()
         self.loadBlockedArtists()
+        // Honor the persisted menu-bar-extra toggle. The key defaults to
+        // `true` when absent (first launch / never-toggled), preserving
+        // the "show by default" behavior. Read via `object(forKey:)` so
+        // we can distinguish "absent" from "explicitly set to false".
+        if let stored = UserDefaults.standard.object(forKey: Self.menuBarExtraEnabledKey) as? Bool {
+            self.menuBarExtraEnabled = stored
+        }
         // Publish ourselves as the process-wide handle for AppIntents.
         // RiffApp creates exactly one AppEnvironment; if that ever
         // changes, the weak ref naturally tracks the latest instance.

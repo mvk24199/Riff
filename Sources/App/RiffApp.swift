@@ -72,6 +72,34 @@ struct RiffApp: App {
         .defaultSize(width: 320, height: 180)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
+
+        // System menu-bar mini player. Compact transport + scrubber that
+        // lives next to the system clock, so the user can pause/skip
+        // without bringing Riff's main window forward. Toggleable via the
+        // Settings sheet (`AppEnvironment.menuBarExtraEnabled`); the
+        // binding makes the `MenuBarExtra` add/remove itself live without
+        // a relaunch.
+        //
+        // Same `env.player` as everywhere else — no second WKWebView.
+        MenuBarExtra(isInserted: menuBarExtraInsertedBinding) {
+            MenuBarMiniPlayer()
+                .environment(environment)
+        } label: {
+            MenuBarMiniPlayerLabel()
+                .environment(environment)
+        }
+        .menuBarExtraStyle(.window)
+    }
+
+    /// Bridges the `@State` AppEnvironment value into a `Binding<Bool>`
+    /// the `MenuBarExtra` `isInserted:` parameter accepts. We can't take
+    /// `$environment.menuBarExtraEnabled` directly because AppEnvironment
+    /// is an `@Observable` class held by `@State`, not a struct.
+    private var menuBarExtraInsertedBinding: Binding<Bool> {
+        Binding(
+            get: { environment.menuBarExtraEnabled },
+            set: { environment.menuBarExtraEnabled = $0 }
+        )
     }
 }
 
