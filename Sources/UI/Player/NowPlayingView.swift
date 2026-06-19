@@ -11,6 +11,13 @@ struct NowPlayingView: View {
     @State private var scrubbing: Double? = nil
     @State private var bottomTab: BottomTab = .upNext
     @State private var queueMode: QueueMode = .related
+    /// Anchor for extrapolating `env.player.elapsed` between polls.
+    /// The bridge polls JS at ~1Hz; without these anchors the per-word
+    /// karaoke fill would tick in 1s steps. Recorded each time the
+    /// player ticks; while playing, the active-line view linearly
+    /// extrapolates `(now - anchorAt) + anchorElapsed`.
+    @State private var anchorElapsed: Double = 0
+    @State private var anchorAt: Date = Date()
 
     enum BottomTab: String, CaseIterable, Identifiable {
         case upNext = "Up Next"
@@ -887,46 +894,114 @@ struct NowPlayingView: View {
 
     /// Synced lyrics view — highlights the line whose time-range covers
     /// `env.player.elapsed` and auto-scrolls it into view as playback
-    /// advances.
+    /// advances. Within the active line, words fill left-to-right via
+    /// per-word interpolation against the line's duration (B2).
     private var syncedLyrics: some View {
         let lines = env.player.lyricsLines
-        let activeIndex = activeLyricIndex(for: env.player.elapsed * 1000, in: lines)
         return ScrollViewReader { proxy in
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
-                    Text(line.text.isEmpty ? "♪" : line.text)
-                        .font(.system(size: idx == activeIndex ? 14 : 13,
-                                      weight: idx == activeIndex ? .semibold : .regular))
-                        .foregroundStyle(
-                            idx == activeIndex ? Color.white :
-                            abs(idx - activeIndex) <= 1 ? Color.white.opacity(0.7) :
-                            Color.white.opacity(0.4)
+            // Re-anchor whenever the player reports a new elapsed value.
+            // Between polls (~1Hz) we extrapolate locally so the active
+            // line's per-word fill stays smooth at ~30fps.
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { context in
+                let elapsedMs = extrapolatedElapsedMs(at: context.date)
+                let activeIndex = LyricsKaraoke.activeLyricIndex(
+                    for: elapsedMs, in: lines
+                )
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
+                        karaokeLine(
+                            line: line,
+                            idx: idx,
+                            activeIndex: activeIndex,
+                            elapsedMs: elapsedMs,
+                            lines: lines
                         )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
                         .id(line.id)
+                    }
+                }
+                .onChange(of: activeIndex) { _, newIndex in
+                    guard newIndex >= 0, newIndex < lines.count else { return }
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(lines[newIndex].id, anchor: .center)
+                    }
                 }
             }
-            .onChange(of: activeIndex) { _, newIndex in
-                guard newIndex >= 0, newIndex < lines.count else { return }
-                withAnimation(.easeOut(duration: 0.25)) {
-                    proxy.scrollTo(lines[newIndex].id, anchor: .center)
-                }
+            .onChange(of: env.player.elapsed) { _, newValue in
+                anchorElapsed = newValue
+                anchorAt = Date()
+            }
+            .onAppear {
+                anchorElapsed = env.player.elapsed
+                anchorAt = Date()
             }
         }
     }
 
-    /// Find the index of the line whose start time precedes `elapsedMs`
-    /// and whose successor's start time exceeds it. Returns -1 when no
-    /// line has started yet.
-    private func activeLyricIndex(for elapsedMs: Double, in lines: [InnerTubeClient.LyricLine]) -> Int {
-        guard !lines.isEmpty else { return -1 }
-        var active = -1
-        for (idx, line) in lines.enumerated() {
-            guard let startMs = line.startMs else { continue }
-            if Double(startMs) <= elapsedMs { active = idx } else { break }
+    /// Render one lyric line. The active line gets a word-by-word fill
+    /// (white → translucent) sweeping left-to-right over the line's
+    /// duration. Tap anywhere on a line to seek to that line's start.
+    @ViewBuilder
+    private func karaokeLine(
+        line: InnerTubeClient.LyricLine,
+        idx: Int,
+        activeIndex: Int,
+        elapsedMs: Double,
+        lines: [InnerTubeClient.LyricLine]
+    ) -> some View {
+        let isActive = idx == activeIndex
+        let display = line.text.isEmpty ? "♪" : line.text
+        let inactiveOpacity: Double = abs(idx - activeIndex) <= 1 ? 0.7 : 0.4
+
+        Group {
+            if isActive {
+                let progress = LyricsKaraoke.lineProgress(
+                    elapsedMs: elapsedMs, idx: idx, in: lines
+                )
+                KaraokeLineView(text: display, progress: progress)
+                    .font(.system(size: 14, weight: .semibold))
+            } else {
+                Text(display)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(inactiveOpacity))
+            }
         }
-        return active
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            seekToLyric(at: idx)
+        }
+        .help("Jump to this line")
+    }
+
+    /// Estimate elapsed in ms using the bridge's last polled value plus
+    /// the elapsed wall-clock time since we observed it. The bridge polls
+    /// at ~1Hz; without extrapolation the active-line fill ticks in
+    /// 1s steps. While paused we freeze at the anchor value so the fill
+    /// doesn't keep advancing through the line. Drift over a 3-5s line
+    /// is imperceptible — it's corrected on the next poll.
+    private func extrapolatedElapsedMs(at now: Date) -> Double {
+        if env.player.isPlaying {
+            let delta = now.timeIntervalSince(anchorAt)
+            // Cap the extrapolation at 2s of drift — beyond that something
+            // has stalled and we'd rather wait for the next real poll than
+            // sweep past lines that haven't started.
+            let bounded = max(0, min(2.0, delta))
+            return (anchorElapsed + bounded) * 1000.0
+        } else {
+            return anchorElapsed * 1000.0
+        }
+    }
+
+    /// Seek to the start of the lyric line at `idx`. Computes a
+    /// fraction since `PlayerBridge.seek(to:)` takes a 0…1 value.
+    private func seekToLyric(at idx: Int) {
+        let lines = env.player.lyricsLines
+        guard idx >= 0, idx < lines.count, let startMs = lines[idx].startMs else { return }
+        let duration = env.player.duration
+        guard duration > 0 else { return }
+        let fraction = max(0, min(1, Double(startMs) / 1000.0 / duration))
+        Task { await env.player.seek(to: fraction) }
     }
 
     private var relatedContent: some View {
