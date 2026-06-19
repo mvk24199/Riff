@@ -251,7 +251,21 @@ final class InnerTubeClient: @unchecked Sendable {
         return nil
     }
 
+    /// One page of search results. `continuation` is non-nil when the
+    /// server returned a fetch-more token; pass it to `searchContinue`
+    /// to load the next chunk.
+    struct SearchPage: Sendable {
+        let items: [MediaItem]
+        let continuation: String?
+    }
+
+    /// Thin wrapper preserving the legacy flat-list return shape for
+    /// callers that don't need continuation tokens.
     func search(query: String, filter: SearchView.SearchFilter) async throws -> [MediaItem] {
+        try await searchPaged(query: query, filter: filter).items
+    }
+
+    func searchPaged(query: String, filter: SearchView.SearchFilter) async throws -> SearchPage {
         var payload: [String: Any] = ["query": query]
         if let token = filter.paramsToken { payload["params"] = token }
         let body = try await postRaw(.search, body: payload)
@@ -259,11 +273,57 @@ final class InnerTubeClient: @unchecked Sendable {
             "tabbedSearchResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
 
-        let results: [MediaItem] = shelves.flatMap { shelf -> [MediaItem] in
-            // Try each known shelf shape. List-shaped shelves
-            // (musicShelfRenderer) hold rows; grid-shaped (gridRenderer) and
-            // carousel-shaped (musicCarouselShelfRenderer) hold tiles. Album
-            // results in particular sometimes come back in a card shelf.
+        let results = Self.parseSearchShelves(shelves)
+        let nextToken = Self.findSearchContinuationToken(in: shelves)
+
+        Log.innertube.debug("search filter=\(String(describing: filter), privacy: .public) shelves=\(shelves.count) results=\(results.count) hasMore=\(nextToken != nil)")
+        if results.isEmpty, !shelves.isEmpty {
+            for (i, shelf) in shelves.enumerated() {
+                Log.innertube.debug("  search shelf[\(i)] keys=\(Array(shelf.keys), privacy: .public)")
+            }
+        }
+        return SearchPage(items: results, continuation: nextToken)
+    }
+
+    /// Fetch the next page of search results. We synthesize a
+    /// one-element shelf array from the continuation envelope so the
+    /// same parser drives both initial and continuation paths.
+    func searchContinue(token: String) async throws -> SearchPage {
+        let body = try await postRaw(.search, body: ["continuation": token])
+        var shelves: [[String: Any]] = []
+        if let cont = Parsing.dig(body, ["continuationContents", "musicShelfContinuation"]) as? [String: Any] {
+            shelves.append(["musicShelfRenderer": cont])
+        } else if let cont = Parsing.dig(body, ["continuationContents", "gridContinuation"]) as? [String: Any] {
+            shelves.append(["gridRenderer": cont])
+        } else if let cont = Parsing.dig(body, ["continuationContents", "musicPlaylistShelfContinuation"]) as? [String: Any] {
+            shelves.append(["musicShelfRenderer": cont])
+        }
+
+        let results = Self.parseSearchShelves(shelves)
+        let nextToken = Self.findSearchContinuationToken(in: shelves)
+        Log.innertube.debug("search continuation count=\(results.count) hasMore=\(nextToken != nil)")
+        return SearchPage(items: results, continuation: nextToken)
+    }
+
+    static func findSearchContinuationToken(in shelves: [[String: Any]]) -> String? {
+        let rendererKeys = ["musicShelfRenderer", "gridRenderer", "musicPlaylistShelfRenderer"]
+        for shelf in shelves {
+            for key in rendererKeys {
+                guard let r = shelf[key] as? [String: Any] else { continue }
+                if let s = Parsing.dig(r, ["continuations", "0", "nextContinuationData", "continuation"]) as? String, !s.isEmpty {
+                    return s
+                }
+                if let s = Parsing.dig(r, ["continuations", "0", "reloadContinuationData", "continuation"]) as? String, !s.isEmpty {
+                    return s
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Walk a list of search shelves and flatten to a MediaItem list.
+    static func parseSearchShelves(_ shelves: [[String: Any]]) -> [MediaItem] {
+        shelves.flatMap { shelf -> [MediaItem] in
             if let items = Parsing.array(shelf, "musicShelfRenderer", "contents") {
                 return items.compactMap(Self.parseListItem)
             }
@@ -278,14 +338,6 @@ final class InnerTubeClient: @unchecked Sendable {
             }
             return []
         }
-
-        Log.innertube.debug("search filter=\(String(describing: filter), privacy: .public) shelves=\(shelves.count) results=\(results.count)")
-        if results.isEmpty, !shelves.isEmpty {
-            for (i, shelf) in shelves.enumerated() {
-                Log.innertube.debug("  search shelf[\(i)] keys=\(Array(shelf.keys), privacy: .public)")
-            }
-        }
-        return results
     }
 
     /// Library contents — InnerTube `/browse` with the section-specific
