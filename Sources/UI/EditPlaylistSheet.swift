@@ -43,7 +43,7 @@ struct EditPlaylistSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Name")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
                     .textCase(.uppercase)
                     .tracking(1.2)
                 TextField("Playlist name", text: $title)
@@ -53,7 +53,7 @@ struct EditPlaylistSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Description")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
                     .textCase(.uppercase)
                     .tracking(1.2)
                 TextField("Optional", text: $description, axis: .vertical)
@@ -64,7 +64,7 @@ struct EditPlaylistSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Privacy")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
                     .textCase(.uppercase)
                     .tracking(1.2)
                 Picker("Privacy", selection: $privacy) {

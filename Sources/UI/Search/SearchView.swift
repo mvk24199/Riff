@@ -158,7 +158,7 @@ struct SearchView: View {
                     HStack(spacing: 6) {
                         Text("\(displayedResults.count) of \(results.count) matches")
                             .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundStyle(.white.opacity(0.75))
                         Button("Clear") {
                             yearFilter = .any
                             durationFilter = .any
@@ -184,10 +184,17 @@ struct SearchView: View {
                         ProgressView().controlSize(.small)
                         Text("Searching…")
                             .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.75))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 60)
+                } else if query.isEmpty && results.isEmpty {
+                    // Pre-search empty state. Without this the user sees
+                    // an unstyled blank surface the moment they wipe the
+                    // field, which reads as "broken". The prompt mirrors
+                    // YT Music's "Find your music" rest state.
+                    InitialSearchState()
+                        .padding(.top, 80)
                 } else if results.isEmpty, !query.isEmpty {
                     EmptySearchState(query: query)
                         .padding(.top, 80)
@@ -301,6 +308,29 @@ struct SearchView: View {
         let filter: SearchFilter
     }
 
+    /// Resting state shown before the user has typed anything (or after
+    /// they've cleared the field). A blank scroll surface reads as
+    /// "broken" — the icon + prompt signal that the input is the next
+    /// action.
+    private struct InitialSearchState: View {
+        var body: some View {
+            VStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.white.opacity(0.4))
+                Text("Find your music")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                Text("Search for songs, albums, artists, playlists, or podcasts.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 32)
+        }
+    }
+
     private struct EmptySearchState: View {
         let query: String
         var body: some View {
@@ -313,7 +343,7 @@ struct SearchView: View {
                     .foregroundStyle(.white.opacity(0.85))
                 Text("Try a different keyword or filter.")
                     .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
             }
             .frame(maxWidth: .infinity)
         }

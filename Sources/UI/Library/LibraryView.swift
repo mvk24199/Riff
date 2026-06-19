@@ -80,7 +80,7 @@ struct LibraryView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(0.75))
                     TextField("Filter \(section.rawValue.lowercased())", text: $filterText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
@@ -93,7 +93,7 @@ struct LibraryView: View {
                 if !filterText.isEmpty {
                     Text("\(displayedItems.count) of \(items.count)")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.white.opacity(0.75))
                 }
 
                 Spacer()
@@ -124,8 +124,8 @@ struct LibraryView: View {
                     .clipShape(Capsule())
                 }
                 .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
                 .fixedSize()
+                .help("Sort library")
             }
             .padding(.horizontal, 24)
 
@@ -153,13 +153,13 @@ struct LibraryView: View {
                 if items.isEmpty && errorMessage == nil {
                     Text("Nothing here yet.")
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.white.opacity(0.75))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 60)
                 } else if displayedItems.isEmpty {
                     Text("No \(section.rawValue.lowercased()) match \"\(filterText)\".")
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.white.opacity(0.75))
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 60)
                 } else {

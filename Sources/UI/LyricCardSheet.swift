@@ -44,7 +44,7 @@ struct LyricCardSheet: View {
                                 .font(.system(size: 11, weight: .semibold))
                                 .textCase(.uppercase)
                                 .tracking(1.2)
-                                .foregroundStyle(.white.opacity(0.55))
+                                .foregroundStyle(.white.opacity(0.75))
                             TextEditor(text: $snippet)
                                 .font(.system(size: 14))
                                 .frame(minHeight: 80, maxHeight: 140)
@@ -204,7 +204,7 @@ private struct LyricCardPreview: View {
                     Spacer()
                     Text("Riff")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.white.opacity(0.75))
                         .tracking(2)
                         .textCase(.uppercase)
                 }

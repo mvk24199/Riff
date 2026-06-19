@@ -47,16 +47,17 @@ struct MiniPlayerView: View {
                 }
                 Spacer(minLength: 12)
 
-                controlButton(systemName: "backward.fill", size: 16) {
+                controlButton(systemName: "backward.fill", size: 16, help: "Previous") {
                     Task { await env.player.previous() }
                 }
                 controlButton(
                     systemName: env.player.isPlaying ? "pause.fill" : "play.fill",
-                    size: 22
+                    size: 22,
+                    help: env.player.isPlaying ? "Pause" : "Play"
                 ) {
                     Task { await env.player.togglePlay() }
                 }
-                controlButton(systemName: "forward.fill", size: 16) {
+                controlButton(systemName: "forward.fill", size: 16, help: "Next") {
                     Task { await env.player.next() }
                 }
 
@@ -67,7 +68,7 @@ struct MiniPlayerView: View {
                                        : env.player.volume < 0.5 ? "speaker.wave.1.fill"
                                        : "speaker.wave.2.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.white.opacity(0.75))
                         .frame(width: 18)
                     Slider(
                         value: Binding(
@@ -118,7 +119,7 @@ struct MiniPlayerView: View {
         }
     }
 
-    private func controlButton(systemName: String, size: CGFloat, action: @escaping () -> Void) -> some View {
+    private func controlButton(systemName: String, size: CGFloat, help: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
@@ -127,5 +128,6 @@ struct MiniPlayerView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(help ?? "")
     }
 }

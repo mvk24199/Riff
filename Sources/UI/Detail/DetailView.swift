@@ -31,7 +31,7 @@ struct DetailView: View {
                     if page.tracks.isEmpty {
                         Text("No tracks")
                             .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundStyle(.white.opacity(0.75))
                             .padding(.horizontal, 32)
                     } else {
                         tracklist(page.tracks, fallbackArtwork: page.artworkURL ?? item.thumbnailURL)
@@ -81,7 +81,7 @@ struct DetailView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .textCase(.uppercase)
                     .tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
                 Text(page.title.isEmpty ? item.title : page.title)
                     .font(.system(size: 32, weight: .bold))
                     .foregroundStyle(.white)
@@ -97,7 +97,7 @@ struct DetailView: View {
                 if let meta = metadataLine(for: page) {
                     Text(meta)
                         .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(0.75))
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 10) {

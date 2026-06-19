@@ -115,7 +115,7 @@ struct NowPlayingView: View {
             Spacer()
             Text("Now Playing")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.75))
                 .textCase(.uppercase)
                 .tracking(1.2)
             Spacer()
@@ -252,7 +252,7 @@ struct NowPlayingView: View {
                 Text("-" + format(time: max(0, duration - displayed)))
             }
             .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.6))
+            .foregroundStyle(.white.opacity(0.75))
         }
     }
 
@@ -261,7 +261,8 @@ struct NowPlayingView: View {
             controlButton(
                 systemName: env.player.liked ? "heart.fill" : "heart",
                 size: 20,
-                tint: env.player.liked ? Theme.red : .white.opacity(0.7)
+                tint: env.player.liked ? Theme.red : .white.opacity(0.7),
+                help: env.player.liked ? "Unlike" : "Like"
             ) {
                 Task { await env.player.toggleLike() }
             }
@@ -270,15 +271,16 @@ struct NowPlayingView: View {
             controlButton(
                 systemName: "shuffle",
                 size: 18,
-                tint: env.player.shuffleEnabled ? Theme.red : .white.opacity(0.7)
+                tint: env.player.shuffleEnabled ? Theme.red : .white.opacity(0.7),
+                help: env.player.shuffleEnabled ? "Shuffle on" : "Shuffle"
             ) {
                 env.player.toggleShuffle()
             }
             // Skip-back -15s — useful for any track but especially podcasts.
-            controlButton(systemName: "gobackward.15", size: 20, tint: .white.opacity(0.85)) {
+            controlButton(systemName: "gobackward.15", size: 20, tint: .white.opacity(0.85), help: "Back 15 seconds") {
                 Task { await env.player.skip(by: -15) }
             }
-            controlButton(systemName: "backward.fill", size: 22, tint: .white) {
+            controlButton(systemName: "backward.fill", size: 22, tint: .white, help: "Previous") {
                 Task { await env.player.previous() }
             }
             ZStack {
@@ -291,11 +293,12 @@ struct NowPlayingView: View {
                     .offset(x: env.player.isPlaying ? 0 : 2)
             }
             .onTapGesture { Task { await env.player.togglePlay() } }
-            controlButton(systemName: "forward.fill", size: 22, tint: .white) {
+            .help(env.player.isPlaying ? "Pause" : "Play")
+            controlButton(systemName: "forward.fill", size: 22, tint: .white, help: "Next") {
                 Task { await env.player.next() }
             }
             // Skip-forward +30s.
-            controlButton(systemName: "goforward.30", size: 20, tint: .white.opacity(0.85)) {
+            controlButton(systemName: "goforward.30", size: 20, tint: .white.opacity(0.85), help: "Forward 30 seconds") {
                 Task { await env.player.skip(by: 30) }
             }
             // Repeat — currently two-state (off / one). The "1" badge
@@ -303,7 +306,8 @@ struct NowPlayingView: View {
             controlButton(
                 systemName: env.player.repeatMode == .one ? "repeat.1" : "repeat",
                 size: 18,
-                tint: env.player.repeatMode == .off ? .white.opacity(0.7) : Theme.red
+                tint: env.player.repeatMode == .off ? .white.opacity(0.7) : Theme.red,
+                help: env.player.repeatMode == .one ? "Repeat one" : "Repeat"
             ) {
                 Task { await env.player.toggleRepeat() }
             }
@@ -342,7 +346,6 @@ struct NowPlayingView: View {
             .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .fixedSize()
         .help(env.player.sleepTimerRemaining == nil ? "Sleep timer" : "Sleep in \(formatTimer(env.player.sleepTimerRemaining!))")
     }
@@ -369,6 +372,7 @@ struct NowPlayingView: View {
         .menuIndicator(.hidden)
         .frame(width: 36, height: 40)
         .disabled(env.player.currentTrack == nil)
+        .help("More")
     }
 
     /// Reusable menu builder for the currently-playing track. Synthesizes
@@ -428,6 +432,7 @@ struct NowPlayingView: View {
         .menuIndicator(.hidden)
         .frame(width: 36, height: 40)
         .onAppear { env.loadUserPlaylistsIfNeeded() }
+        .help("Add to playlist")
     }
 
     /// Playback-speed picker. 1× by default; useful for podcasts at 1.25–2×.
@@ -450,13 +455,13 @@ struct NowPlayingView: View {
         } label: {
             Text(env.player.playbackRate == 1.0 ? "1×" : Self.formatRate(env.player.playbackRate) + "×")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(env.player.playbackRate == 1.0 ? .white.opacity(0.6) : Theme.red)
+                .foregroundStyle(env.player.playbackRate == 1.0 ? .white.opacity(0.75) : Theme.red)
                 .frame(width: 44, height: 40)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .frame(width: 44, height: 40)
+        .frame(width: 60, height: 40)
+        .help("Playback speed")
     }
 
     private static func formatRate(_ rate: Double) -> String {
@@ -465,7 +470,7 @@ struct NowPlayingView: View {
             : String(format: "%g", rate)
     }
 
-    private func controlButton(systemName: String, size: CGFloat, tint: Color, action: @escaping () -> Void) -> some View {
+    private func controlButton(systemName: String, size: CGFloat, tint: Color, help: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
@@ -474,6 +479,7 @@ struct NowPlayingView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(help ?? "")
     }
 
     private func format(time: Double) -> String {
@@ -501,7 +507,7 @@ struct NowPlayingView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .textCase(.uppercase)
                     .tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
                 Spacer()
                 // "Save queue" — YT Music's Up-Next save affordance.
                 // Disabled when there's nothing to save, hidden when
@@ -620,7 +626,7 @@ struct NowPlayingView: View {
                                     .font(.system(size: 10, weight: .semibold))
                                     .textCase(.uppercase)
                                     .tracking(1.2)
-                                    .foregroundStyle(.white.opacity(0.55))
+                                    .foregroundStyle(.white.opacity(0.75))
                             }
                             .buttonStyle(.plain)
                         }
@@ -882,7 +888,7 @@ struct NowPlayingView: View {
                     .lineLimit(1)
                 Text(item.subtitle)
                     .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)
             }
             Spacer()
@@ -896,7 +902,7 @@ struct NowPlayingView: View {
     private func emptyHint(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 12))
-            .foregroundStyle(.white.opacity(0.55))
+            .foregroundStyle(.white.opacity(0.75))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 12)
     }
@@ -1002,7 +1008,7 @@ private struct TunePopover: View {
                 .font(.system(size: 10, weight: .semibold))
                 .textCase(.uppercase)
                 .tracking(1.2)
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.75))
             FlowLayout(spacing: 6) {
                 ForEach(chips) { chip in
                     let isSelected = (selectedChipId ?? chips.first(where: \.isSelected)?.id) == chip.id
@@ -1022,7 +1028,7 @@ private struct TunePopover: View {
             }
             Text("Tap a chip to retune the queue. The currently-playing track keeps playing.")
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.75))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1035,7 +1041,7 @@ private struct TunePopover: View {
                 .font(.system(size: 10, weight: .semibold))
                 .textCase(.uppercase)
                 .tracking(1.2)
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.75))
             HStack(spacing: 6) {
                 ForEach(NowPlayingView.QueueMode.allCases) { mode in
                     Button {
@@ -1058,7 +1064,7 @@ private struct TunePopover: View {
             }
             Text(description(for: fallbackSelection))
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(0.75))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
