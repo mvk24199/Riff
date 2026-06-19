@@ -142,6 +142,28 @@ final class AppEnvironment {
     @ObservationIgnored
     lazy var xrayCardsService: XRayCardsService = XRayCardsService()
 
+    /// D1 — last.fm + ListenBrainz scrobbling. The coordinator owns
+    /// eligibility tracking (per-track started-at + threshold gating)
+    /// and dispatches to every registered service. Both services
+    /// gate their own dispatch on credentials + the per-service
+    /// enabled toggle, so flipping a service off in Settings stops
+    /// scrobbling without any wiring changes here.
+    ///
+    /// @ObservationIgnored: views don't observe scrobbler state, the
+    /// coordinator is purely a sink for player updates.
+    @ObservationIgnored
+    lazy var scrobbler: ScrobblerCoordinator = ScrobblerCoordinator(
+        services: [LastFmScrobbler(), ListenBrainzScrobbler()]
+    )
+
+    /// Wall-clock start time of the *current* track. We pin this on
+    /// every videoId change inside `onUpdate` so scrobbles carry the
+    /// real listen-start, not "the moment we crossed the threshold".
+    @ObservationIgnored
+    private var scrobbleTrackStartedAt: Date = .distantPast
+    @ObservationIgnored
+    private var scrobbleLastSeenVideoId: String? = nil
+
     /// Which source seeds the next-presented New Playlist sheet.
     /// Default is the historical behavior (add current tvamsrack); the
     /// "Save queue" button on the Up Next pane flips this to `.queue`
@@ -393,6 +415,8 @@ final class AppEnvironment {
                 // doesn't keep advertising the last-played song after
                 // the user stops playback.
                 NowPlayingSnapshotWriter.shared.clear()
+                self.scrobbler.reset()
+                self.scrobbleLastSeenVideoId = nil
                 return
             }
             self.nowPlaying.update(
@@ -414,6 +438,28 @@ final class AppEnvironment {
                 isPlaying: self.player.isPlaying,
                 elapsed: self.player.elapsed,
                 duration: self.player.duration
+            )
+            // D1 — scrobbler dispatch. Pin start time on every videoId
+            // change so the eventual scrobble carries the real listen
+            // start, not the moment the threshold was crossed.
+            if self.scrobbleLastSeenVideoId != track.videoId {
+                self.scrobbleTrackStartedAt = Date()
+                self.scrobbleLastSeenVideoId = track.videoId
+            }
+            let durationSeconds: Int? = self.player.duration > 0 ? Int(self.player.duration) : nil
+            let scrobbleTrack = ScrobbleTrack(
+                artist: track.subtitle,
+                title: track.title,
+                album: nil,  // YT Music's watch URL doesn't surface album text on the player payload; left nil.
+                durationSeconds: durationSeconds,
+                startedAt: self.scrobbleTrackStartedAt
+            )
+            self.scrobbler.observe(
+                track: scrobbleTrack,
+                videoId: track.videoId,
+                elapsed: self.player.elapsed,
+                duration: self.player.duration,
+                isPlaying: self.player.isPlaying
             )
         }
         // Hand PlayerBridge the predicate it uses to filter blocked

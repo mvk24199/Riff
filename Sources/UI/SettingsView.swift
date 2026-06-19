@@ -40,6 +40,25 @@ struct SettingsView: View {
     @State private var customLanguageBuffer: String = ""
     private static let otherLanguageSentinel = "Other…"
 
+    // MARK: - Scrobbling state (D1)
+
+    /// Editable buffers for the scrobbling credential fields. Loaded
+    /// from Keychain on appear (presence-only; we never re-render the
+    /// raw secret back into the SecureField). On Save we push the
+    /// trimmed values back and clear the buffer.
+    @State private var lastFmUsernameBuffer: String = ""
+    @State private var lastFmAPIKeyBuffer: String = ""
+    @State private var lastFmAPISecretBuffer: String = ""
+    @State private var lastFmSessionKeyBuffer: String = ""
+    @State private var lastFmEnabled: Bool = false
+    @State private var lastFmStatus: String? = nil
+
+    @State private var listenBrainzTokenBuffer: String = ""
+    @State private var listenBrainzEnabled: Bool = false
+    @State private var listenBrainzUsername: String? = nil
+    @State private var listenBrainzStatus: String? = nil
+    @State private var listenBrainzTestInFlight: Bool = false
+
     enum TestResult: Equatable {
         case success
         case failure(String)
@@ -71,6 +90,8 @@ struct SettingsView: View {
                     Divider().background(Theme.divider)
                     playbackSection
                     Divider().background(Theme.divider)
+                    scrobblingSection
+                    Divider().background(Theme.divider)
                     interfaceSection
                     Divider().background(Theme.divider)
                     libraryAccessSection
@@ -101,6 +122,16 @@ struct SettingsView: View {
                 anthropicAPIKey = "" // empty buffer; placeholder hints "already saved"
             }
             anthropicModel = AnthropicProvider.storedModel()
+            // Scrobbling: load enabled toggles + cached usernames so
+            // the section renders the user's existing state. Secrets
+            // stay in Keychain; buffers stay empty (we never echo a
+            // stored secret back into the SecureField).
+            lastFmEnabled = UserDefaults.standard.bool(forKey: ScrobblerDefaults.lastFmEnabled)
+            if let stored = LastFmScrobbler.storedCredentials() {
+                lastFmUsernameBuffer = stored.username
+            }
+            listenBrainzEnabled = UserDefaults.standard.bool(forKey: ScrobblerDefaults.listenBrainzEnabled)
+            listenBrainzUsername = UserDefaults.standard.string(forKey: ScrobblerDefaults.listenBrainzUsername)
         }
         .task {
             // Best-effort fetch on open; fails silently when the user
@@ -261,6 +292,261 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .labelsHidden()
             }
+        }
+    }
+
+    /// D1 — "Scrobbling": opt-in last.fm + ListenBrainz scrobble
+    /// dispatch. Each service has its own enable toggle + credential
+    /// block; flipping the toggle off stops scrobbling without
+    /// clearing the credentials so the user can re-enable instantly.
+    /// Credentials live in Keychain; toggles + cached display
+    /// usernames live in UserDefaults.
+    private var scrobblingSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionTitle("Scrobbling")
+            Text("Send what you listen to to your last.fm or ListenBrainz profile. Both are opt-in, both stay off until you paste credentials. A track is scrobbled once you've played at least half of it, or 4 minutes — whichever comes first.")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.65))
+                .fixedSize(horizontal: false, vertical: true)
+
+            // last.fm
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("last.fm")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { lastFmEnabled },
+                        set: { newVal in
+                            lastFmEnabled = newVal
+                            UserDefaults.standard.set(newVal, forKey: ScrobblerDefaults.lastFmEnabled)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(LastFmScrobbler.storedCredentials() == nil)
+                }
+                Text("Register an API account at last.fm/api/account/create, then run the one-off Approve flow below to grant Riff scrobble permission.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Group {
+                    labeledField("Username", text: $lastFmUsernameBuffer, placeholder: "your-lastfm-name")
+                    labeledSecureField("API key", text: $lastFmAPIKeyBuffer, placeholder: LastFmScrobbler.storedCredentials() == nil ? "Paste API key" : "•••• saved — paste to replace")
+                    labeledSecureField("Shared secret", text: $lastFmAPISecretBuffer, placeholder: LastFmScrobbler.storedCredentials() == nil ? "Paste shared secret" : "•••• saved — paste to replace")
+                    labeledSecureField("Session key", text: $lastFmSessionKeyBuffer, placeholder: LastFmScrobbler.storedCredentials() == nil ? "Paste session key" : "•••• saved — paste to replace")
+                }
+
+                Text("Get a session key by running last.fm's desktop-app auth flow once: visit last.fm/api/auth/?api_key=YOUR_KEY in a browser, click Approve, then exchange the resulting token for a session key via auth.getSession. The session key never expires.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Button("Save credentials") { saveLastFmCredentials() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.red)
+                        .disabled(!canSaveLastFm)
+                    if LastFmScrobbler.storedCredentials() != nil {
+                        Button("Clear") {
+                            LastFmScrobbler.clearCredentials()
+                            lastFmUsernameBuffer = ""
+                            lastFmAPIKeyBuffer = ""
+                            lastFmAPISecretBuffer = ""
+                            lastFmSessionKeyBuffer = ""
+                            lastFmEnabled = false
+                            UserDefaults.standard.set(false, forKey: ScrobblerDefaults.lastFmEnabled)
+                            lastFmStatus = "Removed."
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Spacer()
+                    if let status = lastFmStatus {
+                        Text(status).font(.system(size: 12)).foregroundStyle(.green)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // ListenBrainz
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("ListenBrainz")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                    if let name = listenBrainzUsername, !name.isEmpty {
+                        Text("• \(name)")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.65))
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { listenBrainzEnabled },
+                        set: { newVal in
+                            listenBrainzEnabled = newVal
+                            UserDefaults.standard.set(newVal, forKey: ScrobblerDefaults.listenBrainzEnabled)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(ListenBrainzScrobbler.storedToken() == nil)
+                }
+                Text("Grab your user-token from listenbrainz.org/profile and paste it below. No additional setup needed.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                labeledSecureField(
+                    "User token",
+                    text: $listenBrainzTokenBuffer,
+                    placeholder: ListenBrainzScrobbler.storedToken() == nil
+                        ? "Paste user token"
+                        : "•••• saved — paste to replace"
+                )
+
+                HStack {
+                    Button("Save token") { saveListenBrainzToken() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.red)
+                        .disabled(listenBrainzTokenBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button {
+                        testListenBrainzToken()
+                    } label: {
+                        if listenBrainzTestInFlight {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Test connection")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(listenBrainzTestInFlight || ListenBrainzScrobbler.storedToken() == nil)
+                    if ListenBrainzScrobbler.storedToken() != nil {
+                        Button("Clear") {
+                            ListenBrainzScrobbler.clearToken()
+                            listenBrainzTokenBuffer = ""
+                            listenBrainzEnabled = false
+                            listenBrainzUsername = nil
+                            UserDefaults.standard.set(false, forKey: ScrobblerDefaults.listenBrainzEnabled)
+                            listenBrainzStatus = "Removed."
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Spacer()
+                    if let status = listenBrainzStatus {
+                        Text(status).font(.system(size: 12)).foregroundStyle(.green)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private var canSaveLastFm: Bool {
+        let u = lastFmUsernameBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let k = lastFmAPIKeyBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let s = lastFmAPISecretBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sk = lastFmSessionKeyBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !u.isEmpty && !k.isEmpty && !s.isEmpty && !sk.isEmpty { return true }
+        // If credentials are already saved, allow partial-update saves
+        // (e.g. rotating just the API key or session key).
+        return LastFmScrobbler.storedCredentials() != nil && (!u.isEmpty || !k.isEmpty || !s.isEmpty || !sk.isEmpty)
+    }
+
+    private func saveLastFmCredentials() {
+        let existing = LastFmScrobbler.storedCredentials()
+        let u = lastFmUsernameBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let k = lastFmAPIKeyBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let s = lastFmAPISecretBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sk = lastFmSessionKeyBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Merge: blank fields fall back to existing stored value if any
+        // (partial rotation). Final state must have all four populated.
+        let finalUsername = u.isEmpty ? (existing?.username ?? "") : u
+        let finalKey      = k.isEmpty ? (existing?.apiKey ?? "") : k
+        let finalSecret   = s.isEmpty ? (existing?.apiSecret ?? "") : s
+        let finalSession  = sk.isEmpty ? (existing?.sessionKey ?? "") : sk
+        guard !finalUsername.isEmpty, !finalKey.isEmpty,
+              !finalSecret.isEmpty, !finalSession.isEmpty else {
+            lastFmStatus = "All four fields are required."
+            return
+        }
+        do {
+            try LastFmScrobbler.saveCredentials(
+                username: finalUsername,
+                apiKey: finalKey,
+                apiSecret: finalSecret,
+                sessionKey: finalSession
+            )
+            // Clear the secret buffers so they don't linger in memory.
+            lastFmAPIKeyBuffer = ""
+            lastFmAPISecretBuffer = ""
+            lastFmSessionKeyBuffer = ""
+            lastFmStatus = "Saved."
+        } catch {
+            lastFmStatus = "Couldn't save to Keychain."
+        }
+    }
+
+    private func saveListenBrainzToken() {
+        let trimmed = listenBrainzTokenBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try ListenBrainzScrobbler.saveToken(trimmed)
+            listenBrainzTokenBuffer = ""
+            listenBrainzStatus = "Saved."
+        } catch {
+            listenBrainzStatus = "Couldn't save to Keychain."
+        }
+    }
+
+    private func testListenBrainzToken() {
+        // Use either the freshly-typed token or the stored one.
+        let candidate = listenBrainzTokenBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let token = candidate.isEmpty ? ListenBrainzScrobbler.storedToken() : candidate,
+              !token.isEmpty else { return }
+        listenBrainzTestInFlight = true
+        listenBrainzStatus = nil
+        Task {
+            let result = await ListenBrainzScrobbler.validate(token: token)
+            await MainActor.run {
+                listenBrainzTestInFlight = false
+                if result.valid {
+                    listenBrainzStatus = result.username.map { "Connected — \($0)" } ?? "Connected."
+                    if let name = result.username {
+                        listenBrainzUsername = name
+                        UserDefaults.standard.set(name, forKey: ScrobblerDefaults.listenBrainzUsername)
+                    }
+                } else {
+                    listenBrainzStatus = result.message
+                }
+            }
+        }
+    }
+
+    private func labeledField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+        }
+    }
+
+    private func labeledSecureField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+            SecureField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
         }
     }
 
