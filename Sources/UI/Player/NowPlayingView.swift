@@ -26,10 +26,18 @@ struct NowPlayingView: View {
     @State private var translationLoading: Bool = false
     @State private var translationError: String? = nil
 
+    /// X-Ray cards for the current track (B4). Held in view state so
+    /// the view re-renders when the bundle lands; the service's own
+    /// cache is the persistence layer across track switches.
+    @State private var xrayCards: XRayCardsService.Bundle? = nil
+    @State private var xrayLoading: Bool = false
+    @State private var xrayError: String? = nil
+
     enum BottomTab: String, CaseIterable, Identifiable {
         case upNext = "Up Next"
         case lyrics = "Lyrics"
         case related = "Related"
+        case context = "Context"
         var id: String { rawValue }
     }
 
@@ -106,12 +114,23 @@ struct NowPlayingView: View {
         .onChange(of: bottomTab) { _, newTab in
             if newTab == .lyrics { env.player.loadLyricsIfNeeded() }
             if newTab == .related { env.player.loadRelatedIfNeeded() }
+            if newTab == .context { fireXRayIfNeeded() }
         }
         .onChange(of: queueMode) { _, mode in
             // "Discover" reuses the same `related` field that the Related
             // top-tab populates — fetch lazily on first selection so we
             // don't pay the cost when the user only ever uses Related.
             if mode == .discover { env.player.loadRelatedIfNeeded() }
+        }
+        // Reset X-Ray view state on track change so a cached bundle for
+        // the new track paints (or a fresh request fires) the next time
+        // the Context tab is opened. The service's own cache means
+        // back-and-forth between two tracks is instant.
+        .onChange(of: env.player.currentTrack?.videoId) { _, _ in
+            xrayCards = nil
+            xrayError = nil
+            xrayLoading = false
+            if bottomTab == .context { fireXRayIfNeeded() }
         }
     }
 
@@ -284,6 +303,7 @@ struct NowPlayingView: View {
                     case .upNext:  upNextContent
                     case .lyrics:  lyricsContent
                     case .related: relatedContent
+                    case .context: contextContent
                     }
                 }
                 .id(bottomTab)
@@ -1087,6 +1107,172 @@ struct NowPlayingView: View {
             } catch {
                 translationError = "Translation failed: \(error.localizedDescription)"
                 translationLoading = false
+            }
+        }
+    }
+
+    // MARK: - X-Ray context cards (B4)
+
+    /// "Context" tab: magazine-style stack of LLM-generated cards
+    /// covering people / place / era / sample / trivia for the current
+    /// track. Gated on a configured API key — without one, shows a
+    /// short hint pointing to Settings.
+    @ViewBuilder
+    private var contextContent: some View {
+        if !env.hasLLMAPIKey {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("X-Ray")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text("Configure an Anthropic API key in Settings to surface context cards — people, places, era, samples, trivia — for the current song.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    env.isSettingsSheetPresented = true
+                } label: {
+                    Label("Open Settings", systemImage: "key.fill")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.red)
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let bundle = xrayCards {
+            xrayCardsList(bundle)
+        } else if xrayLoading {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Reading the room…")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 16)
+        } else if let err = xrayError {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(err)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try again") { fireXRayIfNeeded(force: true) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        } else {
+            emptyHint("Pick a track to surface context.")
+                .onAppear { fireXRayIfNeeded() }
+        }
+    }
+
+    /// Vertical stack of `Card` views with subtle hairline dividers
+    /// between them, magazine-style. No accent leaks beyond Theme.red
+    /// — the per-kind icon is the only chromatic differentiator.
+    @ViewBuilder
+    private func xrayCardsList(_ bundle: XRayCardsService.Bundle) -> some View {
+        if bundle.cards.isEmpty {
+            emptyHint("No context cards for this track.")
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(bundle.cards.enumerated()), id: \.element.id) { idx, card in
+                    xrayCardView(card)
+                        .padding(.vertical, 14)
+                    if idx < bundle.cards.count - 1 {
+                        Divider().background(Color.white.opacity(0.12))
+                    }
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func xrayCardView(_ card: XRayCardsService.Card) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: card.kind.systemImage)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.red)
+                Text(card.kind.label.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            if !card.title.isEmpty {
+                Text(card.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !card.body.isEmpty {
+                Text(card.body)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Kick off an X-Ray request for the current track. Idempotent
+    /// against the service's per-videoId cache; calling from multiple
+    /// hooks (tab open, track-change) is safe. `force` re-fires after
+    /// an error even when state already shows a previous failure.
+    private func fireXRayIfNeeded(force: Bool = false) {
+        guard env.hasLLMAPIKey else { return }
+        guard let track = env.player.currentTrack else { return }
+        let videoId = track.videoId
+        // Cache hit — render synchronously, no loader flash.
+        if !force, let hit = env.xrayCardsService.cached(videoId: videoId) {
+            xrayCards = hit
+            xrayError = nil
+            xrayLoading = false
+            return
+        }
+        if xrayLoading { return }
+        xrayLoading = true
+        xrayError = nil
+        xrayCards = nil
+        let title = track.title
+        let artist = track.subtitle
+        let lyricLines: [String]?
+        if !env.player.lyricsLines.isEmpty {
+            lyricLines = env.player.lyricsLines.map(\.text)
+        } else if let text = env.player.lyrics, !text.isEmpty {
+            lyricLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        } else {
+            lyricLines = nil
+        }
+        let service = env.xrayCardsService
+        Task { @MainActor in
+            do {
+                let bundle = try await service.cards(
+                    videoId: videoId,
+                    title: title,
+                    artist: artist,
+                    lyrics: lyricLines
+                )
+                // Only commit if the track is still the same — the
+                // user may have skipped while we waited.
+                guard env.player.currentTrack?.videoId == videoId else {
+                    xrayLoading = false
+                    return
+                }
+                xrayCards = bundle
+                xrayLoading = false
+            } catch let err as LLMError {
+                xrayError = err.errorDescription ?? "X-Ray failed."
+                xrayLoading = false
+            } catch XRayCardsService.ParseError.noJSONArray {
+                xrayError = "Couldn't parse the model's response."
+                xrayLoading = false
+            } catch {
+                xrayError = "X-Ray failed: \(error.localizedDescription)"
+                xrayLoading = false
             }
         }
     }

@@ -134,6 +134,14 @@ final class AppEnvironment {
         }
     }
 
+    /// X-Ray context cards service (B4). Generates 3-6 magazine-style
+    /// cards (people / place / era / sample / trivia) for the current
+    /// track via the user's configured `LLMProvider`. Same shape as
+    /// `lyricsTranslator` — @MainActor, in-memory cache keyed by
+    /// videoId. @ObservationIgnored for the `lazy var` reason.
+    @ObservationIgnored
+    lazy var xrayCardsService: XRayCardsService = XRayCardsService()
+
     /// Which source seeds the next-presented New Playlist sheet.
     /// Default is the historical behavior (add current tvamsrack); the
     /// "Save queue" button on the Up Next pane flips this to `.queue`
