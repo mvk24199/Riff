@@ -155,6 +155,7 @@ final class PlayerBridge {
             self.repeatMode = mode
         }
         self.shuffleEnabled = UserDefaults.standard.bool(forKey: Self.shuffleKey)
+        self.smartShuffleEnabled = UserDefaults.standard.bool(forKey: Self.smartShuffleKey)
         self.normalizationEnabled = UserDefaults.standard.bool(forKey: Self.normalizationKey)
         // Eager init: start loading music.youtube.com offscreen at app start,
         // so by the time the user clicks anything the page is loaded.
@@ -176,6 +177,7 @@ final class PlayerBridge {
     private static let legacyRateKey = "player.rate"
     private static let repeatKey = "player.repeat"
     private static let shuffleKey = "player.shuffle"
+    private static let smartShuffleKey = "player.smartShuffle"
     private static let normalizationKey = "player.normalizationEnabled"
     private static let lastSessionKey = "player.lastSession"
 
@@ -272,6 +274,22 @@ final class PlayerBridge {
     }
     private(set) var repeatMode: RepeatMode = .off
     private(set) var shuffleEnabled: Bool = false
+    /// B5 Smart Shuffle. When ON *together with* `shuffleEnabled`, the
+    /// visible Up Next gets interleaved with /related recommendations
+    /// (one every `SmartShuffle.defaultEvery` slots), each tagged in
+    /// `smartShuffleInjectedIds` so the QueueRow can render a "+"
+    /// badge. Independent of regular shuffle by spec — but only takes
+    /// effect when shuffle is on, mirroring Spotify's gating. The
+    /// toggle preference is persisted independently so a user who
+    /// flips shuffle off + back on keeps their smart-shuffle choice.
+    private(set) var smartShuffleEnabled: Bool = false
+    /// VideoIds of upNext rows that were injected by Smart Shuffle. A
+    /// `Set` (rather than a property on `MediaItem`) so toggling smart
+    /// shuffle off can strip injections without rebuilding every item
+    /// in the queue. Resets on every track change + every queue
+    /// replacement so a stale injection from a previous radio context
+    /// can't carry forward.
+    private(set) var smartShuffleInjectedIds: Set<String> = []
 
     /// Cycle through repeat modes. Two states for now (off → one →
     /// off); a future `.all` slot will splice in here.
@@ -290,6 +308,69 @@ final class PlayerBridge {
     func toggleShuffle() {
         shuffleEnabled.toggle()
         UserDefaults.standard.set(shuffleEnabled, forKey: Self.shuffleKey)
+        // Flipping shuffle changes whether Smart Shuffle is "active".
+        // Re-run the merge so the queue picks up (or sheds) injections
+        // immediately rather than waiting for the next /next response.
+        applySmartShuffleToCurrentQueue()
+    }
+
+    /// Toggle Smart Shuffle. Separate from regular shuffle by B5 spec
+    /// — a user can have Smart Shuffle armed without it actually
+    /// running (the injection only fires when shuffle is also on).
+    /// Triggering with shuffle ON immediately re-merges the queue;
+    /// triggering with shuffle OFF just flips the preference for next
+    /// time shuffle goes on. Also kicks off a /related fetch if we
+    /// have a browseId but haven't loaded recommendations yet — the
+    /// Related tab is the lazy path, but Smart Shuffle needs the data
+    /// proactively.
+    func toggleSmartShuffle() {
+        smartShuffleEnabled.toggle()
+        UserDefaults.standard.set(smartShuffleEnabled, forKey: Self.smartShuffleKey)
+        if smartShuffleEnabled {
+            loadRelatedIfNeeded()
+        }
+        applySmartShuffleToCurrentQueue()
+    }
+
+    /// Re-merge the visible upNext with the Smart Shuffle pool. Called
+    /// on every event that could change the merge inputs: shuffle /
+    /// smart-shuffle toggle, /next response landed, /related response
+    /// landed. Idempotent — repeatedly calling with the same inputs
+    /// produces the same output.
+    ///
+    /// When either gating flag is off (or there's nothing to inject)
+    /// this strips any previously-injected ids out of upNext so the
+    /// view returns to a clean base queue. That's how the toggle-off
+    /// path "undoes" smart shuffle without forcing a /next refresh.
+    func applySmartShuffleToCurrentQueue() {
+        let injectedNow = smartShuffleInjectedIds
+        // Always start from the un-injected base.
+        let base = queue.upNext.filter { !injectedNow.contains($0.id) }
+        guard smartShuffleEnabled, shuffleEnabled, !related.isEmpty, !base.isEmpty else {
+            if !injectedNow.isEmpty {
+                queue.replaceQueue(base)
+                smartShuffleInjectedIds = []
+            }
+            return
+        }
+        let currentId = currentTrack?.videoId
+        var protected: Set<String> = userQueuedIds
+        if let currentId { protected.insert(currentId) }
+        let result = SmartShuffle.merge(
+            base: base,
+            pool: related,
+            every: SmartShuffle.defaultEvery,
+            protectedIds: protected
+        )
+        // No-op short-circuit so we don't churn the observable upNext
+        // when the merge result matches what's already shown — keeps
+        // SwiftUI from over-redrawing the queue list on every toggle.
+        if result.merged.map(\.id) == queue.upNext.map(\.id),
+           result.injectedIds == injectedNow {
+            return
+        }
+        queue.replaceQueue(result.merged)
+        smartShuffleInjectedIds = result.injectedIds
     }
 
     struct Track: Hashable {
@@ -576,6 +657,20 @@ final class PlayerBridge {
                 self.lyricsTimed = false
                 self.related = []
                 self.relatedSections = []
+                // The injected-ids set is per-watch-context: a fresh
+                // /next means a fresh `related` pool will land soon
+                // (if Smart Shuffle is on) and we'll re-inject around
+                // the new base queue. Clearing now prevents a stale
+                // badge from clinging to a row whose id happens to
+                // re-appear in the new queue.
+                self.smartShuffleInjectedIds = []
+                // Kick off /related proactively when Smart Shuffle is
+                // armed so the injections land soon after the queue
+                // populates. Without this, the user wouldn't see "+"
+                // rows until they opened the Related tab manually.
+                if self.smartShuffleEnabled, self.shuffleEnabled {
+                    self.loadRelatedIfNeeded()
+                }
             }
         }
     }
@@ -692,6 +787,11 @@ final class PlayerBridge {
                     guard !filtered.isEmpty else { return nil }
                     return HomeSection(id: section.id, title: section.title, items: filtered)
                 }
+                // Fresh /related pool — re-run the Smart Shuffle merge
+                // so the "+" rows show up in upNext without waiting on
+                // the next /next refresh. No-op when Smart Shuffle is
+                // off or shuffle is off (see applySmartShuffle... guard).
+                self.applySmartShuffleToCurrentQueue()
             }
         }
     }

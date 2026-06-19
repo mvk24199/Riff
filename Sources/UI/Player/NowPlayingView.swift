@@ -360,6 +360,18 @@ struct NowPlayingView: View {
         }
     }
 
+    /// Help-text label for the shuffle button, surfacing the Smart
+    /// Shuffle state alongside regular shuffle so a hover hint tells
+    /// the user both at once. Right-click toggles Smart Shuffle.
+    private var shuffleHelpText: String {
+        switch (env.player.shuffleEnabled, env.player.smartShuffleEnabled) {
+        case (true, true):   return "Shuffle on · Smart Shuffle on (right-click to disable)"
+        case (true, false):  return "Shuffle on (right-click for Smart Shuffle)"
+        case (false, true):  return "Shuffle off · Smart Shuffle armed (right-click to disable)"
+        case (false, false): return "Shuffle (right-click for Smart Shuffle)"
+        }
+    }
+
     private var playbackControls: some View {
         HStack(spacing: 16) {
             controlButton(
@@ -372,13 +384,31 @@ struct NowPlayingView: View {
             }
             // Shuffle — when ON, our `next()` plays a random upcoming
             // track instead of advancing to the page's natural next.
+            // Right-click reveals the Smart Shuffle (B5) toggle: when
+            // both shuffle AND smart shuffle are on, every 4th slot in
+            // upNext becomes a /related recommendation marked with a
+            // "+" badge in the QueueRow.
             controlButton(
-                systemName: "shuffle",
+                systemName: env.player.smartShuffleEnabled && env.player.shuffleEnabled
+                    ? "shuffle.circle.fill"
+                    : "shuffle",
                 size: 18,
                 tint: env.player.shuffleEnabled ? Theme.red : .white.opacity(0.7),
-                help: env.player.shuffleEnabled ? "Shuffle on" : "Shuffle"
+                help: shuffleHelpText
             ) {
                 env.player.toggleShuffle()
+            }
+            .contextMenu {
+                Button {
+                    env.player.toggleSmartShuffle()
+                } label: {
+                    if env.player.smartShuffleEnabled {
+                        Label("Disable Smart Shuffle", systemImage: "checkmark")
+                    } else {
+                        Label("Enable Smart Shuffle", systemImage: "sparkles")
+                    }
+                }
+                Text("Smart Shuffle injects related-song suggestions every few slots when shuffle is on.")
             }
             // Skip-back -15s — useful for any track but especially podcasts.
             controlButton(systemName: "gobackward.15", size: 20, tint: .white.opacity(0.85), help: "Back 15 seconds") {
@@ -1517,7 +1547,11 @@ struct NowPlayingView: View {
     }
 
     private func queueRow(item: MediaItem, isCurrent: Bool) -> some View {
-        HStack(spacing: 10) {
+        // B5: rows that came from /related via Smart Shuffle get a
+        // "+" badge so the user can tell at a glance that this slot
+        // is a suggestion rather than the playlist's own next track.
+        let isSmartShuffleInjected = env.player.smartShuffleInjectedIds.contains(item.id)
+        return HStack(spacing: 10) {
             ZStack {
                 AsyncImage(url: item.thumbnailURL) { phase in
                     if case .success(let img) = phase {
@@ -1549,6 +1583,16 @@ struct NowPlayingView: View {
                     .lineLimit(1)
             }
             Spacer()
+            if isSmartShuffleInjected {
+                Image(systemName: "plus")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(Theme.red)
+                    .clipShape(Circle())
+                    .help("Smart Shuffle suggestion")
+                    .accessibilityLabel("Smart Shuffle suggestion")
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 5)
