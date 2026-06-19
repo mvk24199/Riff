@@ -30,6 +30,8 @@ targets:
       - path: Sources
       - path: Resources
         buildPhase: resources
+    dependencies:
+      - target: RiffWidget
     info:
       path: Sources/Info.plist
       properties:
@@ -78,6 +80,39 @@ targets:
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${PLIST}"
           echo "Stamped CFBundleVersion=${BUILD_NUMBER}"
         basedOnDependencyAnalysis: false
+
+  RiffWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: RiffWidget
+      # Shared snapshot + widget intents — compiled into BOTH the
+      # app (Sources/Widgets is picked up by the app target's
+      # `path: Sources`) AND this widget extension, so the
+      # serialized AppIntent types match across the process
+      # boundary. NowPlayingSnapshotWriter.swift is app-only
+      # (drives WidgetCenter reloads, owns the artwork cache write
+      # path) and is excluded here.
+      - path: Sources/Widgets/NowPlayingSnapshot.swift
+      - path: Sources/Widgets/RiffWidgetIntents.swift
+    info:
+      path: RiffWidget/Info.plist
+      properties:
+        CFBundleName: RiffWidget
+        CFBundleDisplayName: Riff Widget
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundlePackageType: XPC!
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: RiffWidget/RiffWidget.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.riff.app.widget
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: RiffWidget/RiffWidget.entitlements
+        SKIP_INSTALL: YES
 
   RiffTests:
     type: bundle.unit-test
