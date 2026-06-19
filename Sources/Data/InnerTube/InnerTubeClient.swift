@@ -50,8 +50,22 @@ final class InnerTubeClient: @unchecked Sendable {
 
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    /// Default `URLSession` for InnerTube/Data API traffic. We don't use
+    /// `URLSession.shared` because its default `timeoutIntervalForRequest`
+    /// is 60s, which leaves the UI hanging on a wedged connection for an
+    /// unreasonably long time. 10s is enough for any healthy YT Music
+    /// response (browse/search/next typically land in 200-800ms) and short
+    /// enough that a hostile network surfaces as a real error before the
+    /// user gives up. Tests inject their own session and bypass this.
+    private static func defaultSession() -> URLSession {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 30
+        return URLSession(configuration: config)
+    }
+
+    init(session: URLSession? = nil) {
+        self.session = session ?? Self.defaultSession()
     }
 
     enum InnerTubeError: Error {
@@ -370,9 +384,16 @@ final class InnerTubeClient: @unchecked Sendable {
         guard let token = await OAuthDeviceFlow.refreshIfNeeded() else {
             throw InnerTubeError.needsReauth
         }
-        var components = URLComponents(url: Self.dataAPIBase.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        // Construct URL safely: both `URLComponents(url:resolvingAgainstBaseURL:)`
+        // and `components.url` return optionals. A malformed `path` parameter
+        // (caller bug) shouldn't crash — surface as a decoding error instead.
+        guard
+            var components = URLComponents(url: Self.dataAPIBase.appendingPathComponent(path),
+                                           resolvingAgainstBaseURL: false)
+        else { throw InnerTubeError.decoding }
         components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
-        var req = URLRequest(url: components.url!)
+        guard let url = components.url else { throw InnerTubeError.decoding }
+        var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
