@@ -191,3 +191,20 @@ final class PlaybackKindTests: XCTestCase {
         XCTAssertEqual(PlayerBridge.PlaybackKind.spoken.defaultRate, 1.25)
     }
 }
+
+/// Tier 3 A3: sleep timer modes. PlayerBridge itself can't be
+/// instantiated without a WKWebView, but the mode enum and the
+/// fade duration constant are pure surface — these guard against
+/// silent renames.
+final class SleepTimerModeTests: XCTestCase {
+    func testModesCoverAllThreeBehaviors() {
+        XCTAssertEqual(Set(PlayerBridge.SleepTimerMode.allCases),
+                       [.hardStop, .fadeOut, .endOfTrack])
+    }
+
+    func testFadeOutDurationIsTenSeconds() {
+        // Plan A3 fixes this at 10 seconds — bump intentionally,
+        // not accidentally.
+        XCTAssertEqual(PlayerBridge.fadeOutDuration, 10)
+    }
+}

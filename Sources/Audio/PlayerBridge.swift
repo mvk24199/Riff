@@ -1069,21 +1069,51 @@ final class PlayerBridge {
 
     // MARK: - Sleep timer
 
+    /// How the sleep timer ends playback when the countdown hits zero.
+    ///
+    /// - `hardStop`: immediate pause (original behavior; Spotify
+    ///   desktop, YT Music mobile default).
+    /// - `fadeOut`: ramp `<video>.volume` from the user's current level
+    ///   down to 0 over `fadeOutDuration` seconds, then pause and
+    ///   restore the user's volume. Mirrors Apple Music's sleep fade.
+    /// - `endOfTrack`: stop on the next `.ended` event so the current
+    ///   track plays out cleanly. Niche but loved by audiophiles —
+    ///   neither Spotify nor YT Music desktop ship it.
+    enum SleepTimerMode: Sendable, Hashable, CaseIterable {
+        case hardStop
+        case fadeOut
+        case endOfTrack
+    }
+
     /// Seconds remaining before the sleep timer fires, or nil when no
     /// timer is set. Updated once per second by `sleepTimerTask` so
     /// the UI can display a live countdown.
     private(set) var sleepTimerRemaining: TimeInterval? = nil
 
+    /// Mode for the currently-armed sleep timer. `nil` when no timer
+    /// is set. The next call to `setSleepTimer(minutes:mode:)`
+    /// overwrites it; `cancelSleepTimer` clears it.
+    private(set) var sleepTimerMode: SleepTimerMode? = nil
+
+    /// Set to `true` once the countdown of an `endOfTrack` timer has
+    /// elapsed and we are waiting for the current track's `.ended`
+    /// event to pause. The `.ended` handler reads + clears this flag.
+    private(set) var endOfTrackArmed: Bool = false
+
     @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
+
+    /// Duration of the `.fadeOut` ramp once the timer expires.
+    static let fadeOutDuration: TimeInterval = 10
 
     /// Arm a sleep timer that pauses playback after `minutes`. Replaces
     /// any existing timer. Intentionally not persisted across launches
     /// — sleep timers are session-scoped by every other player's
     /// convention (Apple Music, YT Music mobile, Spotify).
-    func setSleepTimer(minutes: Int) {
+    func setSleepTimer(minutes: Int, mode: SleepTimerMode = .hardStop) {
         cancelSleepTimer()
         let totalSeconds = TimeInterval(minutes * 60)
         sleepTimerRemaining = totalSeconds
+        sleepTimerMode = mode
         let startedAt = Date()
         sleepTimerTask = Task { [weak self] in
             // Tick once per second so the UI shows live countdown.
@@ -1098,19 +1128,81 @@ final class PlayerBridge {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self else { return }
-                if self.isPlaying {
-                    Task { await self.togglePlay() }
-                }
-                self.sleepTimerRemaining = nil
-                self.sleepTimerTask = nil
+                Task { await self.fireSleepTimer(mode: mode) }
             }
         }
     }
 
-    func cancelSleepTimer() {
-        sleepTimerTask?.cancel()
+    /// Execute the chosen sleep-timer mode. Called from `sleepTimerTask`
+    /// when the countdown reaches zero. Extracted so each mode can be
+    /// reasoned about in isolation.
+    private func fireSleepTimer(mode: SleepTimerMode) async {
+        switch mode {
+        case .hardStop:
+            if isPlaying {
+                await togglePlay()
+            }
+            clearSleepTimerState()
+        case .fadeOut:
+            await runVolumeFade(duration: Self.fadeOutDuration)
+            if isPlaying {
+                await togglePlay()
+            }
+            // Restore the user's persisted volume to the JS side so the
+            // next play resumes at the level they expect. We didn't
+            // touch `self.volume` during the ramp — only the raw
+            // `<video>.volume` — so this is a single re-push.
+            await evalWithTimeout(js: "window.musicBridge.setVolume(\(volume))")
+            clearSleepTimerState()
+        case .endOfTrack:
+            // Don't pause yet; let the current track play out. The
+            // `.ended` event handler observes `endOfTrackArmed` and
+            // closes the loop. We intentionally keep
+            // `sleepTimerMode == .endOfTrack` set so the UI can show
+            // "ending after track" rather than pretending we're idle.
+            endOfTrackArmed = true
+            sleepTimerRemaining = nil
+        }
+    }
+
+    /// 10-step linear ramp on `<video>.volume`. We multiply the user's
+    /// current volume by an interpolated factor (1.0 → 0.0) rather than
+    /// writing absolute levels — that way the audible fade scales with
+    /// whatever level the user picked.
+    private func runVolumeFade(duration: TimeInterval) async {
+        let steps = 10
+        let userVolume = volume
+        let stepNs = UInt64((duration / Double(steps)) * 1_000_000_000)
+        for i in 1...steps {
+            if Task.isCancelled { return }
+            let factor = Double(steps - i) / Double(steps)
+            let level = max(0.0, min(1.0, userVolume * factor))
+            await evalWithTimeout(js: "window.musicBridge.setVolume(\(level))")
+            try? await Task.sleep(nanoseconds: stepNs)
+        }
+    }
+
+    /// Reset all sleep-timer state. Called both from `cancelSleepTimer`
+    /// (user-initiated) and at the tail of `fireSleepTimer` (timer
+    /// completed naturally).
+    private func clearSleepTimerState() {
         sleepTimerTask = nil
         sleepTimerRemaining = nil
+        sleepTimerMode = nil
+        endOfTrackArmed = false
+    }
+
+    func cancelSleepTimer() {
+        // If the user cancels mid-fade, push the persisted volume back
+        // to the JS side so we don't leave audio stuck at a partially-
+        // ramped-down level. Cheap and idempotent for the other modes.
+        let wasFading = sleepTimerMode == .fadeOut && sleepTimerTask != nil
+        sleepTimerTask?.cancel()
+        let restoreVolume = volume
+        if wasFading {
+            Task { await self.evalWithTimeout(js: "window.musicBridge.setVolume(\(restoreVolume))") }
+        }
+        clearSleepTimerState()
     }
 
     /// Volume 0.0...1.0. Persisted across track changes within the session
@@ -1221,20 +1313,32 @@ final class PlayerBridge {
         case .stateChanged(let playing):
             isPlaying = playing
         case .ended:
-            // Track reached end-of-stream. If the user explicitly
-            // queued a track via "Play next" / "Add to queue", play
-            // it now. The race against YT Music's natural autoplay
-            // (which also fires on the same video.ended) is now won
-            // proactively in the JS bridge — see setPendingNextURL
-            // below; this Swift-side handler is a belt-and-braces
-            // fallback for the case where the JS interception didn't
-            // fire (e.g. user clicked Play next within a few ms of
-            // end-of-stream and we didn't have time to push the URL).
-            Log.bridge.debug(".ended fired; userQueuedIds=\(self.userQueuedIds, privacy: .public) upNextHeadIds=\(self.upNext.prefix(3).map(\.id), privacy: .public)")
-            Task { [weak self] in
-                guard let self else { return }
-                let advanced = await self.advanceToUserQueuedIfAny()
-                Log.bridge.debug(".ended → advanceToUserQueuedIfAny returned \(advanced, privacy: .public)")
+            // Track reached end-of-stream. If an `endOfTrack` sleep
+            // timer is armed, pause now and short-circuit the normal
+            // autoplay handoff — we don't want a "Play next" item to
+            // sneak in and start the next track right as we're trying
+            // to fall asleep. Otherwise, if the user explicitly queued
+            // a track via "Play next" / "Add to queue", play it now.
+            // The race against YT Music's natural autoplay (which also
+            // fires on the same video.ended) is now won proactively in
+            // the JS bridge — see setPendingNextURL below; this
+            // Swift-side handler is a belt-and-braces fallback for the
+            // case where the JS interception didn't fire (e.g. user
+            // clicked Play next within a few ms of end-of-stream and
+            // we didn't have time to push the URL).
+            Log.bridge.debug(".ended fired; userQueuedIds=\(self.userQueuedIds, privacy: .public) upNextHeadIds=\(self.upNext.prefix(3).map(\.id), privacy: .public) endOfTrackArmed=\(self.endOfTrackArmed, privacy: .public)")
+            if endOfTrackArmed {
+                Task { [weak self] in
+                    guard let self else { return }
+                    if self.isPlaying { await self.togglePlay() }
+                    self.clearSleepTimerState()
+                }
+            } else {
+                Task { [weak self] in
+                    guard let self else { return }
+                    let advanced = await self.advanceToUserQueuedIfAny()
+                    Log.bridge.debug(".ended → advanceToUserQueuedIfAny returned \(advanced, privacy: .public)")
+                }
             }
         case .progress(let t, let d):
             // Filter stale events that arrive in the window right after a

@@ -319,17 +319,30 @@ struct NowPlayingView: View {
     }
 
     /// Sleep-timer menu. Shows the running countdown when armed (mm:ss),
-    /// preset durations + cancel when idle. Mirrors YT Music mobile's
-    /// sleep-timer affordance. Persists for the session only — Apple
+    /// preset durations + mode submenu when idle. Mirrors YT Music
+    /// mobile's sleep-timer affordance, plus two modes neither YTM
+    /// desktop nor Spotify ship: gentle 10s fade-out, and stop after
+    /// the current track ends. Persists for the session only — Apple
     /// Music, YT Music, Spotify all behave this way.
     private var sleepTimerMenu: some View {
         Menu {
-            if env.player.sleepTimerRemaining != nil {
+            if env.player.sleepTimerRemaining != nil || env.player.endOfTrackArmed {
                 Button("Cancel timer") { env.player.cancelSleepTimer() }
                 Divider()
             }
+            // End-of-track is its own discrete entry — it has no
+            // countdown ("stop after this track ends" is the whole
+            // semantics) so a top-level button reads cleaner than
+            // burying it under a "minutes" submenu.
+            Button(action: { env.player.setSleepTimer(minutes: 0, mode: .endOfTrack) }) {
+                Label("End of current track", systemImage: "stop.circle")
+            }
+            Divider()
             ForEach([5, 10, 15, 30, 45, 60], id: \.self) { minutes in
-                Button("\(minutes) min") { env.player.setSleepTimer(minutes: minutes) }
+                Menu("\(minutes) min") {
+                    Button("Stop") { env.player.setSleepTimer(minutes: minutes, mode: .hardStop) }
+                    Button("Fade out (10s)") { env.player.setSleepTimer(minutes: minutes, mode: .fadeOut) }
+                }
             }
         } label: {
             HStack(spacing: 4) {
@@ -338,16 +351,45 @@ struct NowPlayingView: View {
                 if let remaining = env.player.sleepTimerRemaining {
                     Text(formatTimer(remaining))
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                } else if env.player.endOfTrackArmed {
+                    Text("EOT")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 }
             }
-            .foregroundStyle(env.player.sleepTimerRemaining == nil ? .white.opacity(0.7) : Theme.red)
+            .foregroundStyle(sleepTimerActive ? Theme.red : .white.opacity(0.7))
             .frame(height: 40)
             .padding(.horizontal, 4)
             .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help(env.player.sleepTimerRemaining == nil ? "Sleep timer" : "Sleep in \(formatTimer(env.player.sleepTimerRemaining!))")
+        .help(sleepTimerHelp)
+    }
+
+    /// Whether the sleep-timer affordance should render in its
+    /// "armed" tint. Either there's a live countdown, or we've
+    /// elapsed the countdown of an `endOfTrack` timer and are
+    /// awaiting the next track-ended event.
+    private var sleepTimerActive: Bool {
+        env.player.sleepTimerRemaining != nil || env.player.endOfTrackArmed
+    }
+
+    /// Tooltip text — reflects the active mode + remaining time so the
+    /// user doesn't have to open the menu to remember what they armed.
+    private var sleepTimerHelp: String {
+        if let remaining = env.player.sleepTimerRemaining {
+            let suffix: String
+            switch env.player.sleepTimerMode {
+            case .fadeOut: suffix = " (fade out)"
+            case .endOfTrack: suffix = " (end of track)"
+            default: suffix = ""
+            }
+            return "Sleep in \(formatTimer(remaining))\(suffix)"
+        }
+        if env.player.endOfTrackArmed {
+            return "Sleeping after current track"
+        }
+        return "Sleep timer"
     }
 
     private func formatTimer(_ seconds: TimeInterval) -> String {
