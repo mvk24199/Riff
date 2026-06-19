@@ -9,13 +9,14 @@ final class LibrarySortingTests: XCTestCase {
 
     // MARK: - Fixture helpers
 
-    private func song(_ id: String, title: String? = nil) -> MediaItem {
+    private func song(_ id: String, title: String? = nil, durationSeconds: Int? = nil) -> MediaItem {
         MediaItem(
             id: id,
             kind: .song,
             title: title ?? "Title-\(id)",
             subtitle: "Artist",
-            thumbnailURL: nil
+            thumbnailURL: nil,
+            durationSeconds: durationSeconds
         )
     }
 
@@ -124,5 +125,170 @@ final class LibrarySortingTests: XCTestCase {
             ["b", "d", "a", "c", "e"],
             "pinned items appear in their input order, then unpinned items in their input order"
         )
+    }
+
+    // MARK: - sortTracks (B7)
+
+    func testSortTracksOriginalIsIdentity() {
+        let items = [song("a"), song("b"), song("c")]
+
+        let result = LibrarySorting.sortTracks(items, by: .original)
+
+        XCTAssertEqual(result.map(\.id), ["a", "b", "c"], ".original must not permute")
+    }
+
+    func testSortTracksAToZIsCaseInsensitive() {
+        let items = [
+            song("1", title: "banana"),
+            song("2", title: "Apple"),
+            song("3", title: "cherry")
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .aToZ)
+
+        XCTAssertEqual(result.map(\.id), ["2", "1", "3"], "case-insensitive: Apple < banana < cherry")
+    }
+
+    func testSortTracksZToAReversesAlphabetical() {
+        let items = [
+            song("1", title: "banana"),
+            song("2", title: "Apple"),
+            song("3", title: "cherry")
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .zToA)
+
+        XCTAssertEqual(result.map(\.id), ["3", "1", "2"])
+    }
+
+    func testSortTracksPlayCountTieBreaksAlphabetically() {
+        let now = Date()
+        let items = [
+            song("a", title: "Zebra"),  // 2 plays
+            song("b", title: "Apple"),  // 2 plays
+            song("c", title: "Mango")    // 1 play
+        ]
+        let entries: [PlayedEntry] = [
+            entry("a", at: now), entry("a", at: now),
+            entry("b", at: now), entry("b", at: now),
+            entry("c", at: now)
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .playCount, entries: entries)
+
+        // Most-played first; "Apple" beats "Zebra" on alphabetical tie-break.
+        XCTAssertEqual(result.map(\.id), ["b", "a", "c"])
+    }
+
+    func testSortTracksPlayCountTreatsUnplayedAsZero() {
+        let now = Date()
+        let items = [
+            song("a", title: "Apple"),    // 0 plays
+            song("b", title: "Banana")    // 1 play
+        ]
+        let entries: [PlayedEntry] = [entry("b", at: now)]
+
+        let result = LibrarySorting.sortTracks(items, by: .playCount, entries: entries)
+
+        XCTAssertEqual(result.map(\.id), ["b", "a"], "played items beat unplayed under .playCount")
+    }
+
+    func testSortTracksLastPlayedMostRecentFirst() {
+        let early = Date(timeIntervalSince1970: 1_000)
+        let late = Date(timeIntervalSince1970: 5_000)
+        let items = [song("a"), song("b"), song("c")]
+        let entries: [PlayedEntry] = [
+            entry("a", at: early),
+            entry("b", at: late)
+            // "c" never played
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .lastPlayed, entries: entries)
+
+        XCTAssertEqual(result.map(\.id), ["b", "a", "c"], "most-recent first, never-played to the tail")
+    }
+
+    func testSortTracksDurationShortestFirst() {
+        let items = [
+            song("a", durationSeconds: 200),
+            song("b", durationSeconds: 100),
+            song("c", durationSeconds: 300)
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .durationShortest)
+
+        XCTAssertEqual(result.map(\.id), ["b", "a", "c"])
+    }
+
+    func testSortTracksDurationLongestFirst() {
+        let items = [
+            song("a", durationSeconds: 200),
+            song("b", durationSeconds: 100),
+            song("c", durationSeconds: 300)
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .durationLongest)
+
+        XCTAssertEqual(result.map(\.id), ["c", "a", "b"])
+    }
+
+    func testSortTracksDurationShortestSinksMissingDurationsToTail() {
+        let items = [
+            song("a", durationSeconds: 200),
+            song("b", durationSeconds: nil),
+            song("c", durationSeconds: 100),
+            song("d", durationSeconds: nil)
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .durationShortest)
+
+        // Real-duration rows come first in ascending order; missing-
+        // duration rows trail, tied to each other and tie-broken by
+        // title (both "Title-b" and "Title-d", b < d).
+        XCTAssertEqual(result.map(\.id), ["c", "a", "b", "d"])
+    }
+
+    func testSortTracksDurationLongestSinksMissingDurationsToTail() {
+        let items = [
+            song("a", durationSeconds: 200),
+            song("b", durationSeconds: nil),
+            song("c", durationSeconds: 100),
+            song("d", durationSeconds: nil)
+        ]
+
+        let result = LibrarySorting.sortTracks(items, by: .durationLongest)
+
+        // Real-duration rows come first in descending order; missing-
+        // duration rows trail.
+        XCTAssertEqual(result.map(\.id), ["a", "c", "b", "d"])
+    }
+
+    func testSortTracksIsPureAndDoesNotMutateInput() {
+        let original = [song("c"), song("a"), song("b")]
+
+        _ = LibrarySorting.sortTracks(original, by: .aToZ)
+
+        XCTAssertEqual(original.map(\.id), ["c", "a", "b"], "input array must remain untouched")
+    }
+
+    func testTrackSortOrderRequiresPlayHistoryFlag() {
+        XCTAssertTrue(LibrarySorting.TrackSortOrder.playCount.requiresPlayHistory)
+        XCTAssertTrue(LibrarySorting.TrackSortOrder.lastPlayed.requiresPlayHistory)
+        XCTAssertFalse(LibrarySorting.TrackSortOrder.original.requiresPlayHistory)
+        XCTAssertFalse(LibrarySorting.TrackSortOrder.aToZ.requiresPlayHistory)
+        XCTAssertFalse(LibrarySorting.TrackSortOrder.durationShortest.requiresPlayHistory)
+    }
+
+    func testTrackSortOrderOriginalLabelAdaptsToSurface() {
+        // The `.original` label morphs per surface so it reads naturally
+        // — guarding this against silent renames keeps the menu copy
+        // consistent across album / playlist / search.
+        XCTAssertEqual(LibrarySorting.TrackSortOrder.original.displayName(for: .album), "Album order")
+        XCTAssertEqual(LibrarySorting.TrackSortOrder.original.displayName(for: .playlist), "Playlist order")
+        XCTAssertEqual(LibrarySorting.TrackSortOrder.original.displayName(for: .search), "Relevance")
+        XCTAssertEqual(LibrarySorting.TrackSortOrder.original.displayName(for: .generic), "Original order")
+        // Non-`.original` cases share one label across surfaces.
+        XCTAssertEqual(LibrarySorting.TrackSortOrder.aToZ.displayName(for: .album), "A to Z")
+        XCTAssertEqual(LibrarySorting.TrackSortOrder.aToZ.displayName(for: .search), "A to Z")
     }
 }

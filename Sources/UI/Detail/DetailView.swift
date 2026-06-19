@@ -12,6 +12,12 @@ struct DetailView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var editSheetPresented = false
+    /// Active sort order for this page's tracklist. Hydrated from
+    /// UserDefaults by `TrackSortMenu` under the key returned by
+    /// `trackSortPersistenceKey`, so revisiting the same album /
+    /// playlist remembers the user's choice without leaking it across
+    /// other pages.
+    @State private var trackSort: LibrarySorting.TrackSortOrder = .original
 
     /// True when the open detail page represents a playlist owned by
     /// the signed-in user — checked by id against env.userPlaylists.
@@ -20,6 +26,64 @@ struct DetailView: View {
     private var isUserOwnedPlaylist: Bool {
         guard item.kind == .playlist else { return false }
         return env.userPlaylists.contains { $0.id == item.id }
+    }
+
+    /// Per-page UserDefaults key. Scoped to the entity id so each
+    /// album / playlist remembers its own sort. nil for kinds where
+    /// the sort menu doesn't render (artist / song) so the menu falls
+    /// back to in-memory-only mode if it ever does mount.
+    private var trackSortPersistenceKey: String? {
+        switch item.kind {
+        case .album, .playlist, .podcast: return "tracks.sort.\(item.id)"
+        case .artist, .episode, .song:    return nil
+        }
+    }
+
+    /// Surface flavor passed to the menu so the `.original` label
+    /// reads naturally per kind ("Album order" / "Playlist order" /
+    /// "Original order"). Podcasts get the generic phrasing — "episode
+    /// order" sounds redundant on a podcast page already titled with
+    /// the show name.
+    private var trackSortSurface: LibrarySorting.TrackSortSurface {
+        switch item.kind {
+        case .album:    return .album
+        case .playlist: return .playlist
+        default:        return .generic
+        }
+    }
+
+    /// Whether to render the sort menu above the tracklist. Hidden on
+    /// surfaces where it would either confuse (artist top-tracks rail
+    /// is already curated by YT) or render against an empty list.
+    private var showsTrackSortMenu: Bool {
+        guard let page, !page.tracks.isEmpty else { return false }
+        switch item.kind {
+        case .album, .playlist, .podcast: return true
+        default: return false
+        }
+    }
+
+    /// Order-pruned sort options. Podcasts hide the duration sorts
+    /// (episode runtimes vary by hours, not a useful comparison axis
+    /// for most listeners) and keep the play-history sorts off because
+    /// the `PlayedEntry` journal currently records song ids, not
+    /// episode-scoped data.
+    private var availableTrackSorts: [LibrarySorting.TrackSortOrder] {
+        switch item.kind {
+        case .podcast:
+            return [.original, .aToZ, .zToA]
+        default:
+            return LibrarySorting.TrackSortOrder.allCases
+        }
+    }
+
+    /// Tracks, after applying the current sort order. Pure function;
+    /// reads the live play-history journal so `.playCount` /
+    /// `.lastPlayed` reflect any plays that happen while the user is
+    /// on the page (e.g. tapping a track changes its own count on
+    /// the next render).
+    private func sortedTracks(_ tracks: [MediaItem]) -> [MediaItem] {
+        LibrarySorting.sortTracks(tracks, by: trackSort, entries: env.player.playedEntries)
     }
 
     var body: some View {
@@ -34,7 +98,22 @@ struct DetailView: View {
                             .foregroundStyle(.white.opacity(0.75))
                             .padding(.horizontal, 32)
                     } else {
-                        tracklist(page.tracks, fallbackArtwork: page.artworkURL ?? item.thumbnailURL)
+                        if showsTrackSortMenu {
+                            // Sort menu above the tracklist. Right-aligned
+                            // so it doesn't shove the section heading
+                            // around as the user toggles between orders.
+                            HStack {
+                                Spacer()
+                                TrackSortMenu(
+                                    selection: $trackSort,
+                                    surface: trackSortSurface,
+                                    persistenceKey: trackSortPersistenceKey,
+                                    orders: availableTrackSorts
+                                )
+                            }
+                            .padding(.horizontal, 32)
+                        }
+                        tracklist(sortedTracks(page.tracks), fallbackArtwork: page.artworkURL ?? item.thumbnailURL)
                     }
                     // "More from <Artist>" / "You might also like" /
                     // "Other versions" — YT Music's at-the-bottom carousels.
@@ -390,9 +469,15 @@ struct DetailView: View {
         // radio. The /browse album detail we already loaded has the
         // real tracklist — use it directly via playTracks so the
         // local queue chains through the actual album.
+        //
+        // Honor the user's current sort order: "Play" on a tracklist
+        // sorted by "Most played" should queue most-played-first, not
+        // album order. Matches Spotify / Apple Music behaviour and
+        // keeps the visible order in sync with what plays.
         Log.bridge.debug("DetailView.playAll tracks=\(page.tracks.count) playablePlaylistId=\(page.playablePlaylistId ?? "nil", privacy: .public)")
         if !page.tracks.isEmpty {
-            let backfilled = page.tracks.map { backfillArtwork($0, page: page) }
+            let ordered = sortedTracks(page.tracks)
+            let backfilled = ordered.map { backfillArtwork($0, page: page) }
             await env.player.playTracks(backfilled)
         } else if let plid = page.playablePlaylistId {
             // Empty tracklist — fall back to YT's playlist endpoint.
