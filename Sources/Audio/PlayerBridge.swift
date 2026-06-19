@@ -157,6 +157,13 @@ final class PlayerBridge {
         self.shuffleEnabled = UserDefaults.standard.bool(forKey: Self.shuffleKey)
         self.smartShuffleEnabled = UserDefaults.standard.bool(forKey: Self.smartShuffleKey)
         self.normalizationEnabled = UserDefaults.standard.bool(forKey: Self.normalizationKey)
+        // Crossfade between tracks (Tier 3 B8). Persisted as Double
+        // seconds; absent default ⇒ off. `object(forKey:)` so first-
+        // launch absence stays a clean 0 (no key write yet) rather than
+        // forcing 0 into UserDefaults at every init.
+        if let raw = UserDefaults.standard.object(forKey: Self.crossfadeKey) as? Double {
+            self.crossfadeSeconds = Self.clampCrossfade(raw)
+        }
         // Eager init: start loading music.youtube.com offscreen at app start,
         // so by the time the user clicks anything the page is loaded.
         self.webBridge = HiddenPlayerWebView()
@@ -179,6 +186,7 @@ final class PlayerBridge {
     private static let shuffleKey = "player.shuffle"
     private static let smartShuffleKey = "player.smartShuffle"
     private static let normalizationKey = "player.normalizationEnabled"
+    private static let crossfadeKey = "player.crossfadeSeconds"
     private static let lastSessionKey = "player.lastSession"
 
     /// Snapshot of "what was playing when the user quit" — mirrors YT
@@ -1382,6 +1390,29 @@ final class PlayerBridge {
         await eval("window.musicBridge.setNormalizationEnabled(\(enabled))")
     }
 
+    /// Crossfade between tracks (Tier 3 B8). 0 disables; supported
+    /// presets are 0 / 2 / 4 / 6 / 8 seconds (Apple Music's default
+    /// is ~6s). Persisted across launches. All ramp arithmetic lives
+    /// in `Resources/player-bridge.js` — see `__riffXfade` there.
+    /// The Swift side just owns the setting and pushes it to the JS
+    /// bridge on every change and on every page reload.
+    private(set) var crossfadeSeconds: Double = 0
+    static let crossfadePresets: [Double] = [0, 2, 4, 6, 8]
+    static func clampCrossfade(_ raw: Double) -> Double {
+        // Snap to nearest supported preset rather than clamp to a
+        // continuous range — settings UI only offers the discrete
+        // presets, and we never want a corrupted plist to leave us
+        // with a 1.7-second fade.
+        guard raw.isFinite else { return 0 }
+        return crossfadePresets.min(by: { abs($0 - raw) < abs($1 - raw) }) ?? 0
+    }
+    func setCrossfadeSeconds(_ seconds: Double) async {
+        let snapped = Self.clampCrossfade(seconds)
+        crossfadeSeconds = snapped
+        UserDefaults.standard.set(snapped, forKey: Self.crossfadeKey)
+        await eval("window.musicBridge.setCrossfadeSeconds(\(snapped))")
+    }
+
     /// Per-call timeout for JS evaluation. A hung WKWebView (e.g. an
     /// unresponsive page) shouldn't leave our awaiting Task pending forever
     /// — that's how UI commands silently stop working without an error to
@@ -1461,6 +1492,11 @@ final class PlayerBridge {
                     }
                     if self.normalizationEnabled {
                         await self.evalWithTimeout(js: "window.musicBridge.setNormalizationEnabled(true)")
+                    }
+                    // Re-arm crossfade on every page (re)load. Cheap
+                    // no-op when seconds == 0; idempotent otherwise.
+                    if self.crossfadeSeconds > 0 {
+                        await self.evalWithTimeout(js: "window.musicBridge.setCrossfadeSeconds(\(self.crossfadeSeconds))")
                     }
                 }
             }

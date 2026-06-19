@@ -211,3 +211,41 @@ final class SleepTimerModeTests: XCTestCase {
         XCTAssertEqual(PlayerBridge.fadeOutDuration, 10)
     }
 }
+
+/// Tier 3 B8: crossfade between tracks. The ramp arithmetic lives in
+/// `Resources/player-bridge.js`; the Swift side owns the setting,
+/// the preset list, and the clamp helper. These tests guard the
+/// pure surface — the only piece testable without spinning up a
+/// WKWebView.
+final class CrossfadeSettingTests: XCTestCase {
+    func testPresetsAreOffPlusEvenSecondsUpToEight() {
+        XCTAssertEqual(PlayerBridge.crossfadePresets, [0, 2, 4, 6, 8])
+    }
+
+    func testClampSnapsToNearestPreset() {
+        // Exact matches pass through unchanged.
+        for preset in PlayerBridge.crossfadePresets {
+            XCTAssertEqual(PlayerBridge.clampCrossfade(preset), preset)
+        }
+        // Off-preset values snap to the nearest supported preset.
+        XCTAssertEqual(PlayerBridge.clampCrossfade(1.4), 2)
+        XCTAssertEqual(PlayerBridge.clampCrossfade(3.0), 2) // ties resolve to the first-seen
+        XCTAssertEqual(PlayerBridge.clampCrossfade(3.4), 4)
+        XCTAssertEqual(PlayerBridge.clampCrossfade(7.0), 6) // 7 is equidistant to 6 and 8; ties resolve to first seen
+        XCTAssertEqual(PlayerBridge.clampCrossfade(7.1), 8)
+    }
+
+    func testClampGuardsAgainstNonFiniteAndOutOfRange() {
+        // NaN / infinity collapse to 0 (off) — a corrupted plist that
+        // wrote `nan` or `inf` should never strand the user with an
+        // unkillable crossfade.
+        XCTAssertEqual(PlayerBridge.clampCrossfade(.nan), 0)
+        XCTAssertEqual(PlayerBridge.clampCrossfade(.infinity), 0)
+        XCTAssertEqual(PlayerBridge.clampCrossfade(-.infinity), 0)
+        // Negative values snap to the nearest preset (0).
+        XCTAssertEqual(PlayerBridge.clampCrossfade(-5), 0)
+        // Beyond the top preset still snaps to the top — we don't
+        // silently extend the range.
+        XCTAssertEqual(PlayerBridge.clampCrossfade(120), 8)
+    }
+}

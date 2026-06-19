@@ -209,6 +209,31 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .labelsHidden()
             }
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Crossfade")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                    Text("Fades the end of each track into the beginning of the next over the chosen duration. Volume-only — YouTube Music's audio source can't overlap two tracks, so beat-matched mixing isn't possible.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Picker("", selection: Binding(
+                    get: { env.player.crossfadeSeconds },
+                    set: { newValue in
+                        Task { await env.player.setCrossfadeSeconds(newValue) }
+                    }
+                )) {
+                    ForEach(PlayerBridge.crossfadePresets, id: \.self) { seconds in
+                        Text(seconds == 0 ? "Off" : "\(Int(seconds))s").tag(seconds)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 90)
+            }
         }
     }
 
