@@ -27,20 +27,37 @@ final class QueueManager {
 
     /// Tracks heard earlier in this session (most-recent last).
     /// Persisted across launches via `PlayedHistoryStore`.
-    private(set) var playedHistory: [MediaItem] = []
+    ///
+    /// Mirrors the items in `playedEntries` for the legacy callers
+    /// (Recap, Up-Next pane "Recently played" rows) that don't care
+    /// about the played-at timestamp. The Stats surface (B1) reads
+    /// `playedEntries` directly so it can filter by recency.
+    var playedHistory: [MediaItem] { playedEntries.map(\.item) }
+
+    /// Timestamped played history (most-recent last). Source of truth
+    /// since B1; `playedHistory` derives from this. Persisted via
+    /// `PlayedHistoryStore` under the v3 key — see that file for the
+    /// v2 → v3 migration story.
+    private(set) var playedEntries: [PlayedEntry] = []
 
     /// History cap. Enforced both in-memory and on the persisted
     /// journal so an old corrupted store can't balloon memory.
+    ///
+    /// Default bumped from 50 → 500 with B1: the Stats surface offers
+    /// 7d / 30d / 90d windows and 50 entries doesn't get an active
+    /// listener through a single weekend. 500 entries is ~25 KB at
+    /// the encoded MediaItem size, so the synchronous-write cost
+    /// stays in microseconds.
     @ObservationIgnored private let historyCap: Int
     @ObservationIgnored private let historyStore: PlayedHistoryStore
 
     /// `defaults` is injectable for tests so fixture history can't
     /// leak into the production `UserDefaults.standard`. Production
     /// callers should pass nothing and let it default.
-    init(historyCap: Int = 50, defaults: UserDefaults = .standard) {
+    init(historyCap: Int = 500, defaults: UserDefaults = .standard) {
         self.historyCap = historyCap
         self.historyStore = PlayedHistoryStore(cap: historyCap, defaults: defaults)
-        self.playedHistory = historyStore.load()
+        self.playedEntries = historyStore.load()
     }
 
     // MARK: - Up Next mutation
@@ -97,13 +114,13 @@ final class QueueManager {
     /// the encode cost is microseconds, and the synchronous write
     /// means an unexpected crash never loses more than the *current*
     /// track.
-    func archive(_ item: MediaItem) {
-        if playedHistory.last?.id == item.id { return }
-        playedHistory.append(item)
-        if playedHistory.count > historyCap {
-            playedHistory.removeFirst(playedHistory.count - historyCap)
+    func archive(_ item: MediaItem, at date: Date = Date()) {
+        if playedEntries.last?.item.id == item.id { return }
+        playedEntries.append(PlayedEntry(item: item, playedAt: date))
+        if playedEntries.count > historyCap {
+            playedEntries.removeFirst(playedEntries.count - historyCap)
         }
-        historyStore.save(playedHistory)
+        historyStore.save(playedEntries)
     }
 
     /// Wipe the persisted journal. Wired to Sign Out so the next user

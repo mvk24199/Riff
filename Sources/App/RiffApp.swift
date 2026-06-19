@@ -103,16 +103,22 @@ struct RiffApp: App {
     }
 }
 
-/// Help menu entry that surfaces the "Your Riff Highlights" sheet. Lives
-/// in its own struct so it can read `@FocusedValue(\.appEnvironment)`,
-/// which the CommandGroup builder otherwise can't reach.
+/// Help menu entry that surfaces the always-on Stats sheet (formerly
+/// "Your Riff Highlights"). Lives in its own struct so it can read
+/// `@FocusedValue(\.appEnvironment)`, which the CommandGroup builder
+/// otherwise can't reach.
+///
+/// Renamed in B1 to reflect the year-round framing: the same sheet
+/// now exposes 7-day / 30-day / 90-day / all-time windows via a
+/// picker, so calling it "Highlights" undersold what it does.
 private struct RecapMenuItem: View {
     @FocusedValue(\.appEnvironment) private var env
 
     var body: some View {
-        Button("Your Riff Highlights") {
+        Button("Stats…") {
             env?.isRecapSheetPresented = true
         }
+        .keyboardShortcut("Y", modifiers: [.command, .shift])
         .disabled(env == nil)
     }
 }

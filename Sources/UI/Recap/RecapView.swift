@@ -2,15 +2,45 @@ import SwiftUI
 
 // MARK: - Pure stats
 
+/// Time window over which `RecapStats` aggregates. The "All time"
+/// option matches the historical Recap behaviour (everything in the
+/// journal); the bounded windows power the always-on Stats surface
+/// (B1) so users can ask "what did I play this week?" without the
+/// year-end gate.
+///
+/// Note: entries migrated from the pre-B1 journal carry a `.distantPast`
+/// timestamp; they're included in `.allTime` and excluded from every
+/// bounded window. See `PlayedHistoryStore` for the migration story.
+enum RecapWindow: String, CaseIterable, Identifiable, Sendable {
+    case sevenDays = "7 days"
+    case thirtyDays = "30 days"
+    case ninetyDays = "90 days"
+    case allTime = "All time"
+
+    var id: String { rawValue }
+
+    /// Number of seconds back from `now` that count as "in window".
+    /// `nil` for `.allTime` — no filter applied.
+    var lookbackSeconds: TimeInterval? {
+        switch self {
+        case .sevenDays:   return 60 * 60 * 24 * 7
+        case .thirtyDays:  return 60 * 60 * 24 * 30
+        case .ninetyDays:  return 60 * 60 * 24 * 90
+        case .allTime:     return nil
+        }
+    }
+}
+
 /// Aggregated stats computed from `PlayerBridge.queue.playedHistory`.
 ///
 /// Held as a plain value type so the SwiftUI sheet stays a thin presenter
 /// and the math is trivially unit-testable — `RecapStatsTests` feeds
 /// fixture `[MediaItem]` arrays directly without standing up a PlayerBridge.
 ///
-/// The "Year in Riff" framing is intentionally avoided: `playedHistory` is
-/// capped at 50 entries (see `QueueManager.historyCap`), so anything
-/// labeled "year" would lie about the sample. We call it "Highlights".
+/// Backwards-compat: the `compute(from: [MediaItem])` entry point is
+/// preserved verbatim so existing callers (and the legacy test suite)
+/// keep working. The B1-era `compute(from: [PlayedEntry], window:now:)`
+/// adds the time-window filter on top.
 struct RecapStats: Equatable, Sendable {
     /// One entry in the top-artists list.
     struct ArtistCount: Equatable, Hashable, Sendable {
@@ -123,6 +153,28 @@ struct RecapStats: Equatable, Sendable {
             mostRecent: history.last
         )
     }
+
+    /// Time-windowed variant used by the always-on Stats surface (B1).
+    ///
+    /// `now` is injectable so tests can pin a deterministic reference
+    /// point; production callers leave the default and get wall-clock
+    /// `Date()`. The filter is a half-open lookback: entries with
+    /// `playedAt >= now - window.lookbackSeconds` are included. For
+    /// `.allTime`, no filter applies and every entry counts.
+    static func compute(
+        from entries: [PlayedEntry],
+        window: RecapWindow,
+        now: Date = Date()
+    ) -> RecapStats {
+        let filtered: [MediaItem]
+        if let lookback = window.lookbackSeconds {
+            let cutoff = now.addingTimeInterval(-lookback)
+            filtered = entries.compactMap { $0.playedAt >= cutoff ? $0.item : nil }
+        } else {
+            filtered = entries.map(\.item)
+        }
+        return compute(from: filtered)
+    }
 }
 
 // MARK: - Formatting helpers (file-private)
@@ -141,8 +193,14 @@ fileprivate func formatRuntime(_ totalSeconds: Int) -> String {
 
 // MARK: - View
 
-/// Sheet body for the "Your Riff Highlights" view. Reached via the
-/// Help menu's "Your Riff Highlights" entry; presented over RootView.
+/// Sheet body for the "Your Riff Highlights" / Stats view. Reached via
+/// the Help menu's "Your Riff Highlights" entry; presented over RootView.
+///
+/// Permanent surface since B1: the window picker (7d / 30d / 90d / all)
+/// lets users ask the same questions year-round, not just in December.
+/// The original Recap framing (one tile, no window switcher) was
+/// year-end-only; this view subsumes it so we don't ship two
+/// near-identical stats surfaces.
 ///
 /// Pure presentation — all aggregation runs through `RecapStats.compute`
 /// on the played history snapshot taken in `body`. No network, no
@@ -151,11 +209,20 @@ struct RecapView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
 
+    /// Currently-selected window. Defaults to `.thirtyDays` — the most
+    /// useful "what have I been into lately" framing for a returning
+    /// listener. State, not @AppStorage: a per-launch reset keeps the
+    /// sheet from sticking on a window the user explored once and
+    /// would prefer not to anchor on.
+    @State private var window: RecapWindow = .thirtyDays
+
     var body: some View {
-        let stats = RecapStats.compute(from: env.player.playedHistory)
+        let stats = RecapStats.compute(from: env.player.playedEntries, window: window)
 
         VStack(spacing: 0) {
             header
+            Divider()
+            windowPicker
             Divider()
             if stats.isEmpty {
                 emptyState
@@ -185,7 +252,7 @@ struct RecapView: View {
 
     private var header: some View {
         HStack {
-            Text("Your Riff Highlights")
+            Text("Your Stats")
                 .font(.system(size: 16, weight: .semibold))
             Spacer()
             Button("Close") { dismiss() }
@@ -196,15 +263,41 @@ struct RecapView: View {
         .padding(.vertical, 14)
     }
 
+    /// Segmented control above the body that lets users scope the
+    /// aggregation to a recency window. Selecting a window
+    /// instantaneously recomputes — the math is microseconds over a
+    /// ≤500-entry array, so no debounce.
+    private var windowPicker: some View {
+        Picker("Window", selection: $window) {
+            ForEach(RecapWindow.allCases) { w in
+                Text(w.rawValue).tag(w)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .help("Pick the recency window. Plays older than the window are excluded.")
+    }
+
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("From this session's playback")
+            Text(introHeadline)
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.75))
-            Text("Riff tracks your recent plays locally — never uploaded. Up to the last 50 tracks count toward these stats.")
+            Text("Riff tracks your recent plays locally — never uploaded. Up to the last 500 tracks count toward these stats.")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.45))
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var introHeadline: String {
+        switch window {
+        case .sevenDays:   return "From the last 7 days"
+        case .thirtyDays:  return "From the last 30 days"
+        case .ninetyDays:  return "From the last 90 days"
+        case .allTime:     return "Across your full play history"
         }
     }
 
@@ -408,18 +501,34 @@ struct RecapView: View {
     // MARK: empty state
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
+        // Distinguish "no plays at all" from "no plays in this window".
+        // If `playedEntries` has anything outside the active window we
+        // surface a hint to widen the window — much friendlier than the
+        // generic "play some tracks" copy when the user clearly has been.
+        let hasAnyHistory = !env.player.playedEntries.isEmpty
+        let isBoundedWindow = window.lookbackSeconds != nil
+        let showWidenHint = hasAnyHistory && isBoundedWindow
+
+        return VStack(spacing: 14) {
             Image(systemName: "waveform")
                 .font(.system(size: 38, weight: .light))
                 .foregroundStyle(.white.opacity(0.35))
-            Text("Nothing to highlight yet")
+            Text(showWidenHint ? "Nothing in this window" : "Nothing to highlight yet")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
-            Text("Play a few tracks and come back — Riff will summarize what you listened to.")
+            Text(showWidenHint
+                ? "Try a wider window — older plays don't show up in shorter ones."
+                : "Play a few tracks and come back — Riff will summarize what you listened to.")
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.75))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+            if showWidenHint {
+                Button("Switch to All time") { window = .allTime }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.red)
+                    .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(40)
