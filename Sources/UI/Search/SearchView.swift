@@ -9,6 +9,19 @@ struct SearchView: View {
     @State private var results: [MediaItem] = []
     @State private var searching: Bool = false
     @State private var errorMessage: String?
+    /// Token for the next page of search results when YT included one.
+    /// Nil before the first search, nil when the result set is
+    /// exhausted, and nil under the `.all` filter (heterogeneous
+    /// responses don't carry a single top-level continuation).
+    @State private var nextPageToken: String? = nil
+    /// In-flight guard so a single scroll-to-bottom doesn't fan out
+    /// into multiple parallel continuation fetches.
+    @State private var loadingMore: Bool = false
+    /// Non-nil when the last continuation fetch failed; surfaced as a
+    /// retry affordance under the list. We don't clobber the existing
+    /// `results` on continuation failure — that would erase rows the
+    /// user is still scrolling.
+    @State private var loadMoreError: String? = nil
     /// Sort order applied on top of the network results, scoped per
     /// active filter. Hydrated from UserDefaults by `TrackSortMenu`
     /// under `search.sort.{filter}` so the user's "I always sort
@@ -333,10 +346,61 @@ struct SearchView: View {
                                 SearchResultRow(item: item)
                             }
                         }
+                        loadMoreFooter
                     }
                 }
             }
             .padding(.bottom, 16)
+        }
+    }
+
+    /// Endless-scroll sentinel rendered at the bottom of the result
+    /// list. Behavior:
+    ///   - `nextPageToken != nil` and no error: a 1pt invisible
+    ///     trigger row that fires `loadMoreIfNeeded()` on appear
+    ///     (cheap because the parent is `LazyVStack`), plus a
+    ///     ProgressView while a fetch is in flight.
+    ///   - `loadMoreError != nil`: a Retry button so the user can
+    ///     recover without re-typing the query.
+    ///   - neither: empty footer (no infinite-scroll hint when
+    ///     there's nothing more to fetch).
+    @ViewBuilder
+    private var loadMoreFooter: some View {
+        if let err = loadMoreError {
+            HStack(spacing: 8) {
+                Text(err)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+                Button("Retry") {
+                    loadMoreError = nil
+                    Task { await loadMoreIfNeeded() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .center)
+        } else if nextPageToken != nil {
+            // The 1pt sentinel sits inside the LazyVStack so its
+            // `.onAppear` only fires when the user has scrolled close
+            // enough to the bottom for the row to be materialized.
+            Color.clear
+                .frame(height: 1)
+                .onAppear {
+                    Task { await loadMoreIfNeeded() }
+                }
+            if loadingMore {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading more…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
     }
 
@@ -471,16 +535,61 @@ struct SearchView: View {
         } catch {
             return  // task was cancelled — newer input arrived
         }
-        guard !query.isEmpty else { results = []; searching = false; return }
+        guard !query.isEmpty else {
+            results = []
+            nextPageToken = nil
+            loadMoreError = nil
+            searching = false
+            return
+        }
         searching = true
         defer { searching = false }
         do {
-            let raw = try await env.innerTube.search(query: query, filter: filter)
-            results = raw.filter { !env.isBlocked($0) }
+            let page = try await env.innerTube.searchPaged(query: query, filter: filter)
+            results = page.items.filter { !env.isBlocked($0) }
+            nextPageToken = page.continuation
+            loadMoreError = nil
             errorMessage = nil
         } catch {
             results = []
+            nextPageToken = nil
             errorMessage = LoadErrorPresenter.message(for: error, env: env)
+        }
+    }
+
+    /// Fetch the next page when the user scrolls near the bottom. We
+    /// guard against parallel re-entry with `loadingMore` so a brief
+    /// scroll-jitter at the bottom doesn't fan out into multiple
+    /// concurrent fetches. The token is captured before the async
+    /// hop so a stale fetch (user changed filter mid-request) can't
+    /// land on the wrong result set — the `query`/`filter` snapshot
+    /// is compared on return.
+    private func loadMoreIfNeeded() async {
+        guard let token = nextPageToken,
+              !loadingMore,
+              !searching,
+              !query.isEmpty else { return }
+        loadingMore = true
+        let issuedQuery = query
+        let issuedFilter = filter
+        defer { loadingMore = false }
+        do {
+            let page = try await env.innerTube.searchContinue(token: token)
+            // Drop the result if the user changed the input mid-flight.
+            guard issuedQuery == query, issuedFilter == filter else { return }
+            // De-dupe by id — InnerTube has been seen to return the
+            // same row twice across pages, and SwiftUI's ForEach blows
+            // up on duplicate ids.
+            let existingIds = Set(results.map(\.id))
+            let fresh = page.items.filter { !existingIds.contains($0.id) && !env.isBlocked($0) }
+            results.append(contentsOf: fresh)
+            nextPageToken = page.continuation
+            loadMoreError = nil
+        } catch {
+            // Don't wipe `results` — the user is mid-scroll. Surface
+            // a retry chip under the list instead.
+            guard issuedQuery == query, issuedFilter == filter else { return }
+            loadMoreError = LoadErrorPresenter.message(for: error, env: env)
         }
     }
 }

@@ -643,4 +643,95 @@ final class InnerTubeParserTests: XCTestCase {
         let item = InnerTubeClient.parseTwoRowItem(tile)
         XCTAssertEqual(item?.year, 2019)
     }
+
+    // MARK: - search continuation tokens (B11)
+
+    /// A kind-scoped /search response carries its continuation token on
+    /// the `musicShelfRenderer` that holds the row list. We synthesize
+    /// the same shape `searchPaged` walks (a flat shelves array) and
+    /// confirm the token surfaces.
+    func testFindSearchContinuationTokenOnMusicShelf() {
+        let shelves: [[String: Any]] = [[
+            "musicShelfRenderer": [
+                "contents": [],
+                "continuations": [[
+                    "nextContinuationData": ["continuation": "TOKEN_A"]
+                ]]
+            ]
+        ]]
+        XCTAssertEqual(InnerTubeClient.findSearchContinuationToken(in: shelves), "TOKEN_A")
+    }
+
+    /// Reload-style continuations (older shape) should still resolve.
+    func testFindSearchContinuationTokenReloadShape() {
+        let shelves: [[String: Any]] = [[
+            "musicShelfRenderer": [
+                "contents": [],
+                "continuations": [[
+                    "reloadContinuationData": ["continuation": "TOKEN_B"]
+                ]]
+            ]
+        ]]
+        XCTAssertEqual(InnerTubeClient.findSearchContinuationToken(in: shelves), "TOKEN_B")
+    }
+
+    /// The `.all` filter response is a heterogeneous stack of shelves
+    /// without any top-level continuation token — make sure we return
+    /// nil rather than hallucinating one.
+    func testFindSearchContinuationTokenMissingReturnsNil() {
+        let shelves: [[String: Any]] = [[
+            "musicShelfRenderer": [
+                "contents": []
+            ]
+        ]]
+        XCTAssertNil(InnerTubeClient.findSearchContinuationToken(in: shelves))
+    }
+
+    /// An empty continuation string is treated as no-more (some
+    /// responses carry an empty placeholder where the real token
+    /// would land).
+    func testFindSearchContinuationTokenEmptyStringTreatedAsNil() {
+        let shelves: [[String: Any]] = [[
+            "musicShelfRenderer": [
+                "contents": [],
+                "continuations": [[
+                    "nextContinuationData": ["continuation": ""]
+                ]]
+            ]
+        ]]
+        XCTAssertNil(InnerTubeClient.findSearchContinuationToken(in: shelves))
+    }
+
+    /// `parseSearchShelves` is shared between the initial /search and
+    /// the continuation parse. Confirm a continuation-shaped row list
+    /// (synthesized by wrapping `musicShelfContinuation` as a fake
+    /// `musicShelfRenderer`) flattens to the same MediaItem shape the
+    /// initial parse produces.
+    func testParseSearchShelvesFlattensListRows() {
+        let row: [String: Any] = [
+            "musicResponsiveListItemRenderer": [
+                "flexColumns": [[
+                    "musicResponsiveListItemFlexColumnRenderer": [
+                        "text": [
+                            "runs": [[
+                                "text": "Continuation Song",
+                                "navigationEndpoint": [
+                                    "watchEndpoint": ["videoId": "vCont"]
+                                ]
+                            ]]
+                        ]
+                    ]
+                ]]
+            ]
+        ]
+        let shelves: [[String: Any]] = [[
+            "musicShelfRenderer": [
+                "contents": [row]
+            ]
+        ]]
+        let items = InnerTubeClient.parseSearchShelves(shelves)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.id, "vCont")
+        XCTAssertEqual(items.first?.title, "Continuation Song")
+    }
 }
