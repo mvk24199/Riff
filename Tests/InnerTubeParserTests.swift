@@ -391,6 +391,87 @@ final class InnerTubeParserTests: XCTestCase {
         XCTAssertTrue(InnerTubeClient.parseRelatedSections(["contents": "garbage"]).isEmpty)
     }
 
+    // MARK: - parseHomeChips
+
+    /// Standard FEmusic_home response shape — chip cloud lives under
+    /// sectionListRenderer.header.chipCloudRenderer.chips. Each chip
+    /// must surface its label plus the browseEndpoint.params blob the
+    /// follow-up filtered-home browse needs.
+    func testParseHomeChipsStandardShape() {
+        let body: [String: Any] = [
+            "contents": [
+                "singleColumnBrowseResultsRenderer": [
+                    "tabs": [[
+                        "tabRenderer": [
+                            "content": [
+                                "sectionListRenderer": [
+                                    "header": [
+                                        "chipCloudRenderer": [
+                                            "chips": [
+                                                [
+                                                    "chipCloudChipRenderer": [
+                                                        "text": ["runs": [["text": "Workout"]]],
+                                                        "navigationEndpoint": [
+                                                            "browseEndpoint": [
+                                                                "browseId": "FEmusic_home",
+                                                                "params": "WORKOUT_PARAMS"
+                                                            ]
+                                                        ]
+                                                    ]
+                                                ],
+                                                [
+                                                    "chipCloudChipRenderer": [
+                                                        "text": ["runs": [["text": "Focus"]]],
+                                                        "navigationEndpoint": [
+                                                            "browseEndpoint": [
+                                                                "browseId": "FEmusic_home",
+                                                                "params": "FOCUS_PARAMS"
+                                                            ]
+                                                        ]
+                                                    ]
+                                                ],
+                                                // Empty label — must be dropped.
+                                                [
+                                                    "chipCloudChipRenderer": [
+                                                        "text": ["runs": [["text": ""]]],
+                                                        "navigationEndpoint": [
+                                                            "browseEndpoint": ["params": "X"]
+                                                        ]
+                                                    ]
+                                                ],
+                                                // Missing params — must be dropped.
+                                                [
+                                                    "chipCloudChipRenderer": [
+                                                        "text": ["runs": [["text": "NoParams"]]],
+                                                        "navigationEndpoint": [
+                                                            "browseEndpoint": ["browseId": "FEmusic_home"]
+                                                        ]
+                                                    ]
+                                                ],
+                                            ]
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]]
+                ]
+            ]
+        ]
+        let chips = InnerTubeClient.parseHomeChips(body)
+        XCTAssertEqual(chips.count, 2, "Empty-label and missing-params chips must be dropped")
+        XCTAssertEqual(chips.map(\.label), ["Workout", "Focus"])
+        XCTAssertEqual(chips.map(\.params), ["WORKOUT_PARAMS", "FOCUS_PARAMS"])
+    }
+
+    /// Defense against renderer drift — when YT returns an unknown
+    /// shape, parseHomeChips must return empty so HomeView simply
+    /// renders without the chip row rather than crashing.
+    func testParseHomeChipsEmptyOnUnknownShape() {
+        XCTAssertTrue(InnerTubeClient.parseHomeChips([:]).isEmpty)
+        XCTAssertTrue(InnerTubeClient.parseHomeChips(["contents": "garbage"]).isEmpty)
+    }
+
     // MARK: - MediaItem Codable round-trip
 
     /// Played-history persistence relies on this. If MediaItem ever

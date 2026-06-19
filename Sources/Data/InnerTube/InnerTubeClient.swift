@@ -77,9 +77,35 @@ final class InnerTubeClient: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func browseHome() async throws -> [HomeSection] {
+    /// One mood / activity chip in the chip cloud above the Home rails
+    /// ("Energize", "Workout", "Focus", "Sleep", "Commute", "Romance",
+    /// "Sad", "Feel good", "Party", "Relax"…). YT serves these as a
+    /// `chipCloudRenderer` at the top of `FEmusic_home`; each chip
+    /// carries a `browseEndpoint` whose `params` re-filter Home to that
+    /// vibe when sent on a second `/browse` call.
+    struct HomeChip: Sendable, Identifiable, Hashable {
+        /// Display label ("Workout", "Sleep", …).
+        let label: String
+        /// `browseEndpoint.params` blob — opaque protobuf YT echoes back
+        /// to scope the next `FEmusic_home` browse to this mood. Required;
+        /// chips without params are useless and parsing drops them.
+        let params: String
+        var id: String { label.isEmpty ? params : label }
+    }
+
+    /// Full payload of a Home browse — chips above the rails plus the
+    /// rails themselves. We return both because they come from the same
+    /// `/browse` response and the chip row needs to render before users
+    /// scroll past the first rail.
+    struct HomeFeed: Sendable {
+        let chips: [HomeChip]
+        let sections: [HomeSection]
+    }
+
+    func browseHome() async throws -> HomeFeed {
         // Initial /browse — 3 shelves typically come back here.
         let body = try await postRaw(.browse, body: ["browseId": BrowseID.home])
+        let chips = Self.parseHomeChips(body)
         let initialShelves = Parsing.array(body, "contents",
             "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
             "content", "sectionListRenderer", "contents") ?? []
@@ -106,8 +132,8 @@ final class InnerTubeClient: @unchecked Sendable {
                 break
             }
         }
-        Log.innertube.debug("home final sections=\(sections.count)")
-        return sections
+        Log.innertube.debug("home final sections=\(sections.count) chips=\(chips.count)")
+        return HomeFeed(chips: chips, sections: sections)
     }
 
     /// Fetch the Explore feed — Charts, New releases, Moods & genres,
@@ -128,6 +154,46 @@ final class InnerTubeClient: @unchecked Sendable {
         let sections = shelves.compactMap(Self.parseHomeShelf)
         Log.innertube.debug("explore sections=\(sections.count) shelfKinds=\(shelves.compactMap { Array($0.keys).first }, privacy: .public)")
         return sections
+    }
+
+    /// Re-fetch Home filtered by a mood chip's params blob.
+    func browseHomeFiltered(chipParams: String) async throws -> [HomeSection] {
+        let body = try await postRaw(.browse, body: [
+            "browseId": BrowseID.home,
+            "params": chipParams,
+        ])
+        let shelves = Parsing.array(body, "contents",
+            "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+            "content", "sectionListRenderer", "contents") ?? []
+        return shelves.compactMap(Self.parseHomeShelf)
+    }
+
+    /// Extract the mood / activity chip cloud above the rails from a
+    /// FEmusic_home browse response. YT serves these under
+    /// sectionListRenderer.header.chipCloudRenderer.chips; each chip
+    /// is a chipCloudChipRenderer carrying a text run and a
+    /// browseEndpoint.params blob that re-scopes Home when echoed back.
+    static func parseHomeChips(_ body: [String: Any]) -> [HomeChip] {
+        let candidatePaths: [[String]] = [
+            ["contents", "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+             "content", "sectionListRenderer", "header", "chipCloudRenderer", "chips"],
+            ["contents", "singleColumnBrowseResultsRenderer", "tabs", "0", "tabRenderer",
+             "content", "sectionListRenderer", "header", "musicChipCloudRenderer", "chips"],
+            ["header", "chipCloudRenderer", "chips"],
+        ]
+        for path in candidatePaths {
+            guard let nodes = Parsing.dig(body, path) as? [[String: Any]] else { continue }
+            let chips: [HomeChip] = nodes.compactMap { node in
+                guard let r = node["chipCloudChipRenderer"] as? [String: Any] else { return nil }
+                let raw = Parsing.runs(r, "text") ?? ""
+                let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let params = Parsing.dig(r, ["navigationEndpoint", "browseEndpoint", "params"]) as? String,
+                      !label.isEmpty, !params.isEmpty else { return nil }
+                return HomeChip(label: label, params: params)
+            }
+            if !chips.isEmpty { return chips }
+        }
+        return []
     }
 
     /// Fetch the Moods & Genres feed — a flat list of mood/genre
