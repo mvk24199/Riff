@@ -425,24 +425,29 @@ final class PlayerBridge {
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
-                // BUG-1 fix: preserve any user-queued tracks across
-                // the wholesale replace. Items the user explicitly
-                // added via "Play next" / "Add to queue" (tagged in
-                // userQueuedIds) get spliced into the head of the
-                // new server queue, so a routine /next refresh from
-                // autoplay doesn't drop them. Order among preserved
-                // items is the order they currently appear in upNext
-                // — which matches the order the user added them
-                // (playNext inserts at head, addToEnd appends).
+                // BUG-1 / BUG-2 round 5: don't wholesale-replace the
+                // visible upNext on every track change. Keep the
+                // existing list (minus the just-played track) and
+                // only use /next as a TAIL EXTENSION — items YT
+                // surfaces that we haven't shown yet.
+                //
+                // Prior shape preserved only user-queued items and
+                // dropped everything else, which made the queue
+                // visibly churn on every track change ("song B was
+                // at top of upNext, I skipped, now upNext shows D/E/F
+                // because YT moved on to C"). That broke the user's
+                // mental model that upNext is a stable forward view.
+                //
+                // For an explicit context switch (play(item:), chip
+                // change), the caller has already cleared upNext —
+                // so `surviving` is just the preserved user-queued
+                // items and the /next response fills the tail. Same
+                // observable startup behavior as before.
                 let curId = self.currentTrack?.videoId
-                let preserved = self.upNext.filter { item in
-                    self.userQueuedIds.contains(item.id) && item.id != curId
-                }
-                let preservedIds = Set(preserved.map(\.id))
-                // De-dupe: if /next happened to surface a track we're
-                // about to splice back, take our copy (preserves the
-                // user-queued tag) and drop the server's duplicate.
-                let merged = preserved + fetched.filter { !preservedIds.contains($0.id) }
+                let surviving = self.upNext.filter { $0.id != curId }
+                let survivingIds = Set(surviving.map(\.id))
+                let tailExtension = fetched.filter { !survivingIds.contains($0.id) }
+                let merged = surviving + tailExtension
                 // Drop blocked-artist tracks before they reach the
                 // UI. The currentTrack itself is never filtered —
                 // the user is already listening to it; pulling it
@@ -711,14 +716,28 @@ final class PlayerBridge {
         // item always wins. This is the same path autoplay-on-ended
         // uses; consuming through user-skip just preempts it.
         if await advanceToUserQueuedIfAny() { return }
+        let currentId = currentTrack?.videoId
+        // Priority 2: shuffle picks randomly from the visible upNext.
         if shuffleEnabled, !upNext.isEmpty {
-            let currentId = currentTrack?.videoId
             let candidates = upNext.filter { $0.id != currentId }
             if let pick = candidates.randomElement() {
                 await play(item: pick)
                 return
             }
         }
+        // Priority 3: play the head of upNext. This guarantees
+        // "what the user sees is what plays" — the old behavior of
+        // delegating to YT's .next-button drove playback from YT's
+        // internal queue, which diverges from our shown upNext after
+        // any /next refresh, block-filter, or chip-mode change. The
+        // visible head is the user's mental model of "next song".
+        if let head = upNext.first(where: { $0.id != currentId }) {
+            await play(item: head)
+            return
+        }
+        // Priority 4: nothing visible to play — fall back to YT's
+        // own autoplay-next as a last resort (it may know about a
+        // server-side continuation we haven't surfaced yet).
         await eval("window.musicBridge.next()")
     }
     func previous()   async { await eval("window.musicBridge.previous()") }
