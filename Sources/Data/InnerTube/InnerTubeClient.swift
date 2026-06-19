@@ -227,6 +227,87 @@ final class InnerTubeClient: @unchecked Sendable {
         return sections
     }
 
+    /// D3 — chronological feed of new releases from artists the user
+    /// has subscribed to via YT Music. Fans out to each subscribed
+    /// artist's detail page in parallel (capped at `limit` artists so
+    /// power users with hundreds of subscriptions don't trigger
+    /// runaway requests), pulls albums + singles + EP shelves out of
+    /// the response, and returns the union sorted release-year desc.
+    ///
+    /// Anonymous callers will get an empty signed-in artists list and
+    /// short-circuit to `[]` — the UI gates this on `env.isSignedIn`
+    /// regardless, but the defense-in-depth keeps the network path
+    /// honest. The whole call is best-effort: any per-artist failure
+    /// is swallowed (logged) so one unreachable artist doesn't blank
+    /// the whole rail.
+    func newReleasesFromFollowedArtists(limit: Int = 25) async throws -> [MediaItem] {
+        let artists = try await library(section: .artists)
+        let scoped = Array(artists.filter { $0.kind == .artist }.prefix(max(0, limit)))
+        guard !scoped.isEmpty else { return [] }
+        Log.innertube.debug("followedFeed artists=\(scoped.count)")
+
+        // Parallel fan-out — each artist detail is its own /browse call.
+        // Per-artist failures are caught inside each child task so one
+        // 5xx doesn't poison the whole feed. `releasesFromArtistDetail`
+        // is a pure static extractor, kept off the actor to keep the
+        // closure Sendable.
+        let releases: [MediaItem] = await withTaskGroup(of: [MediaItem].self, returning: [MediaItem].self) { group in
+            for artist in scoped {
+                let client = self
+                group.addTask {
+                    do {
+                        let page = try await client.detail(forBrowseId: artist.id)
+                        return Self.releasesFromArtistDetail(page)
+                    } catch {
+                        Log.innertube.error("followedFeed artist=\(artist.id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                        return []
+                    }
+                }
+            }
+            var all: [MediaItem] = []
+            for await chunk in group { all.append(contentsOf: chunk) }
+            return all
+        }
+
+        // Dedupe by id (an artist's collab can surface on both pages),
+        // then sort by year desc with nil-year items sinking to the
+        // tail. Tie-break alphabetically so SwiftUI doesn't permute on
+        // every refresh.
+        var seen = Set<String>()
+        let unique = releases.filter { seen.insert($0.id).inserted }
+        let sorted = unique.sorted { lhs, rhs in
+            let ly = lhs.year ?? Int.min
+            let ry = rhs.year ?? Int.min
+            if ly == ry {
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+            return ly > ry
+        }
+        Log.innertube.debug("followedFeed releases=\(sorted.count) (deduped from \(releases.count))")
+        return sorted
+    }
+
+    /// Pull album / single / EP tiles out of an artist's detail page.
+    /// Artist pages surface those as `musicCarouselShelfRenderer`
+    /// rails under titles like "Albums", "Singles", "Songs and singles",
+    /// or "EPs"; the items themselves are `musicTwoRowItemRenderer`
+    /// tiles (kind == .album) already carrying release-year runs.
+    /// We deliberately ignore shelves like "Videos", "From your
+    /// library", "Fans might also like" — those don't belong in a
+    /// new-releases feed.
+    static func releasesFromArtistDetail(_ page: DetailPage) -> [MediaItem] {
+        let releaseKeywords = ["album", "single", "ep"]
+        return page.relatedSections.flatMap { section -> [MediaItem] in
+            let lower = section.title.lowercased()
+            guard releaseKeywords.contains(where: { lower.contains($0) }) else { return [] }
+            // Keep only album-shaped tiles — an artist's "Singles" rail
+            // sometimes mixes song-shaped tiles, but release-year
+            // metadata lives on the album-shaped tiles and tapping
+            // plays the single anyway.
+            return section.items.filter { $0.kind == .album }
+        }
+    }
+
     /// Walk a /browse response (initial or continuation-chunk) and return
     /// the next continuation token, if YT included one.
     private static func findContinuationToken(in body: [String: Any]) -> String? {

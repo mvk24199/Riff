@@ -7,6 +7,12 @@ struct LibraryView: View {
     @State private var filterText: String = ""
     @State private var items: [MediaItem] = []
     @State private var mixedForYou: [HomeSection] = []
+    /// D3 — "New from artists you follow". Bandcamp-inspired
+    /// chronological release feed. Only populated when the user is on
+    /// the Artists sub-section AND signed-in; otherwise we don't pay
+    /// the fan-out cost (up to N parallel /browse calls).
+    @State private var followedReleases: [MediaItem] = []
+    @State private var followedReleasesLoading: Bool = false
     @State private var errorMessage: String?
 
     enum Section: String, CaseIterable, Identifiable {
@@ -192,6 +198,15 @@ struct LibraryView: View {
             .padding(.horizontal, 24)
 
             ScrollView {
+                // D3 — "New from artists you follow" sits at the top
+                // of the Artists sub-section. Bandcamp-inspired
+                // chronological release feed sorted year-desc; gated
+                // to Artists so the fan-out cost is only paid when
+                // the user is actually looking at this sub-section.
+                if section == .artists && (!followedReleases.isEmpty || followedReleasesLoading) {
+                    followedReleasesRail
+                        .padding(.bottom, 16)
+                }
                 // Personalized "Mixed for you" carousels sit above
                 // the section grid so the user sees auto-generated
                 // mixes (Supermix, Discover Mix, …) before the
@@ -316,5 +331,70 @@ struct LibraryView: View {
             guard !kept.isEmpty else { return nil }
             return HomeSection(id: sec.id, title: sec.title, items: kept)
         }
+
+        // D3 — only fetch the followed-artist feed when the user is
+        // viewing Artists. Fan-out is expensive (up to N /browse calls
+        // in parallel) and the rail only renders on this section, so
+        // we don't pay the cost on every section switch.
+        if section == .artists, env.isSignedIn {
+            await loadFollowedReleases()
+        } else {
+            followedReleases = []
+        }
+    }
+
+    /// D3 — header + horizontal release tiles for the followed-artist
+    /// feed. Reuses `ThumbnailButton` so tap/context-menu/hover-play
+    /// behavior matches the rest of the Library grid. Renders a 4-tile
+    /// shimmer while the parallel fan-out resolves.
+    @ViewBuilder
+    private var followedReleasesRail: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("New from artists you follow")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                Text("Recent releases, newest first")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+            .padding(.horizontal, 24)
+
+            if followedReleases.isEmpty && followedReleasesLoading {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(0..<4, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.white.opacity(0.06))
+                                .frame(width: 180, height: 180)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 16) {
+                        ForEach(followedReleases) { item in
+                            ThumbnailButton(item: item)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                }
+            }
+        }
+    }
+
+    /// Refresh the D3 "New from artists you follow" rail. Best-effort:
+    /// any failure (network, parser drift, no subscribed artists)
+    /// collapses to an empty rail rather than an error banner — the
+    /// Artists grid below remains the user's primary surface.
+    private func loadFollowedReleases() async {
+        followedReleasesLoading = true
+        defer { followedReleasesLoading = false }
+        let raw = (try? await env.innerTube.newReleasesFromFollowedArtists()) ?? []
+        // Mirror the blocked-artist filter we apply elsewhere — if the
+        // user has thumbed-down an artist, their releases shouldn't
+        // re-surface here through the side door.
+        followedReleases = raw.filter { !env.isBlocked($0) }
     }
 }

@@ -734,4 +734,93 @@ final class InnerTubeParserTests: XCTestCase {
         XCTAssertEqual(items.first?.id, "vCont")
         XCTAssertEqual(items.first?.title, "Continuation Song")
     }
+
+    // MARK: - D3 followed-artist feed: releasesFromArtistDetail
+
+    /// Helper: build a `DetailPage` carrying the given relatedSections,
+    /// stubbing out the header/tracklist fields that
+    /// `releasesFromArtistDetail` doesn't read.
+    private func makeArtistDetailPage(sections: [HomeSection]) -> InnerTubeClient.DetailPage {
+        InnerTubeClient.DetailPage(
+            title: "Test Artist",
+            subtitle: "",
+            subtitleRuns: [],
+            artworkURL: nil,
+            playablePlaylistId: nil,
+            tracks: [],
+            relatedSections: sections
+        )
+    }
+
+    /// Album / Single / EP shelves are picked up; "Videos" and
+    /// "Fans might also like" are excluded. Song-shaped tiles inside
+    /// a Singles shelf are dropped so only album-shaped items (which
+    /// carry release-year metadata + a navigable browseId) make it
+    /// into the feed.
+    func testReleasesFromArtistDetailPicksAlbumsSinglesEPs() {
+        let album = MediaItem(id: "alb1", kind: .album, title: "Album One",
+                              subtitle: "Artist · 2026", thumbnailURL: nil, year: 2026)
+        let single = MediaItem(id: "sng1", kind: .album, title: "Single One",
+                               subtitle: "Artist · 2025", thumbnailURL: nil, year: 2025)
+        let ep = MediaItem(id: "epA", kind: .album, title: "EP A",
+                           subtitle: "Artist · 2024", thumbnailURL: nil, year: 2024)
+        let songTile = MediaItem(id: "songInSingleRail", kind: .song,
+                                 title: "Track-only tile", subtitle: "Artist",
+                                 thumbnailURL: nil)
+        let video = MediaItem(id: "vid1", kind: .album, title: "Music Video",
+                              subtitle: "Artist", thumbnailURL: nil)
+        let related = MediaItem(id: "rel1", kind: .artist, title: "Other Artist",
+                                subtitle: "", thumbnailURL: nil)
+
+        let sections: [HomeSection] = [
+            HomeSection(id: "Albums", title: "Albums", items: [album]),
+            // Mixed-kind Singles rail: album-shaped single keeps, song-shaped tile drops.
+            HomeSection(id: "Singles", title: "Singles", items: [single, songTile]),
+            HomeSection(id: "EPs", title: "EPs", items: [ep]),
+            HomeSection(id: "Videos", title: "Videos", items: [video]),
+            HomeSection(id: "Fans", title: "Fans might also like", items: [related]),
+        ]
+        let page = makeArtistDetailPage(sections: sections)
+        let releases = InnerTubeClient.releasesFromArtistDetail(page)
+
+        let ids = Set(releases.map(\.id))
+        XCTAssertTrue(ids.contains("alb1"))
+        XCTAssertTrue(ids.contains("sng1"))
+        XCTAssertTrue(ids.contains("epA"))
+        XCTAssertFalse(ids.contains("songInSingleRail"),
+                       "song-shaped tiles inside Singles rail must be filtered out")
+        XCTAssertFalse(ids.contains("vid1"),
+                       "Videos shelf must not be treated as a release rail")
+        XCTAssertFalse(ids.contains("rel1"),
+                       "'Fans might also like' must not bleed into the followed feed")
+    }
+
+    /// Title matching is keyword-substring + case-insensitive, so
+    /// "Songs and singles" or "Studio Albums" still count.
+    func testReleasesFromArtistDetailKeywordMatchIsLenient() {
+        let a = MediaItem(id: "a", kind: .album, title: "Studio LP",
+                          subtitle: "", thumbnailURL: nil)
+        let b = MediaItem(id: "b", kind: .album, title: "Live Cuts",
+                          subtitle: "", thumbnailURL: nil)
+        let page = makeArtistDetailPage(sections: [
+            HomeSection(id: "1", title: "Studio Albums", items: [a]),
+            HomeSection(id: "2", title: "Songs and singles", items: [b]),
+            HomeSection(id: "3", title: "Discography", items: [
+                MediaItem(id: "c", kind: .album, title: "X",
+                          subtitle: "", thumbnailURL: nil)
+            ]),
+        ])
+        let releases = InnerTubeClient.releasesFromArtistDetail(page)
+        let ids = Set(releases.map(\.id))
+        XCTAssertTrue(ids.contains("a"))
+        XCTAssertTrue(ids.contains("b"))
+        XCTAssertFalse(ids.contains("c"),
+                       "'Discography' alone shouldn't match — keywords are album/single/ep")
+    }
+
+    /// Empty relatedSections → empty releases, no crash.
+    func testReleasesFromArtistDetailEmptySections() {
+        let page = makeArtistDetailPage(sections: [])
+        XCTAssertTrue(InnerTubeClient.releasesFromArtistDetail(page).isEmpty)
+    }
 }
