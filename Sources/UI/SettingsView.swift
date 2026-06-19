@@ -333,6 +333,7 @@ struct SettingsView: View {
                         // want stale cached output bleeding into the
                         // new session.
                         env.lyricsTranslator.clearCache()
+                        env.xrayCardsService.clearCache()
                         anthropicAPIKey = ""
                         aiSaveStatus = "Key removed."
                         aiTestResult = nil
