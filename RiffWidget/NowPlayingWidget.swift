@@ -18,7 +18,7 @@ import AppIntents
 // point PlayerBridge actually executes the command.
 
 struct NowPlayingWidget: Widget {
-    let kind: String = NowPlayingSnapshotWriter.widgetKind
+    let kind: String = NowPlayingWidgetIdentifier.kind
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: NowPlayingProvider()) { entry in

@@ -1,6 +1,16 @@
 import Foundation
 
-// Wire-format the host app writes and the widget reads. Lives in a
+// Kind identifier shared between the main app (which calls
+// WidgetCenter.shared.reloadTimelines) and the widget extension
+// (which registers its Widget with this kind). Lifted out of
+// NowPlayingSnapshotWriter so the widget target — which does not
+// link the writer file — can reference it without a missing-symbol
+// error.
+public enum NowPlayingWidgetIdentifier {
+    public static let kind = "dev.riff.nowPlayingWidget"
+}
+
+// Wire-format the main app writes and the widget reads. Lives in a
 // separate target-shared file so both the Riff app target and the
 // RiffWidget extension can encode/decode the same shape without
 // dragging in PlayerBridge / WKWebView / SwiftUI dependencies.

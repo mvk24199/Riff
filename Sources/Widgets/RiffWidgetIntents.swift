@@ -60,7 +60,7 @@ public enum WidgetCommandStore {
 // Toggle play/pause from the widget.
 public struct WidgetTogglePlayIntent: AppIntent {
     public static let title: LocalizedStringResource = "Toggle Riff Playback"
-    public static var openAppWhenRun: Bool = true
+    public static let openAppWhenRun: Bool = true
     public init() {}
     public func perform() async throws -> some IntentResult {
         WidgetCommandStore.enqueue(.togglePlay)
@@ -71,7 +71,7 @@ public struct WidgetTogglePlayIntent: AppIntent {
 // Skip forward.
 public struct WidgetSkipNextIntent: AppIntent {
     public static let title: LocalizedStringResource = "Riff: Skip Next"
-    public static var openAppWhenRun: Bool = true
+    public static let openAppWhenRun: Bool = true
     public init() {}
     public func perform() async throws -> some IntentResult {
         WidgetCommandStore.enqueue(.next)
@@ -82,7 +82,7 @@ public struct WidgetSkipNextIntent: AppIntent {
 // Skip backwards.
 public struct WidgetPreviousIntent: AppIntent {
     public static let title: LocalizedStringResource = "Riff: Previous Track"
-    public static var openAppWhenRun: Bool = true
+    public static let openAppWhenRun: Bool = true
     public init() {}
     public func perform() async throws -> some IntentResult {
         WidgetCommandStore.enqueue(.previous)

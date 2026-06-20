@@ -85,7 +85,7 @@ final class NowPlayingSnapshotWriter {
 
         // Reload the widget timeline. Cheap call when no widget is
         // installed — WidgetKit no-ops it. Available on macOS 11+.
-        WidgetCenter.shared.reloadTimelines(ofKind: NowPlayingSnapshotWriter.widgetKind)
+        WidgetCenter.shared.reloadTimelines(ofKind: NowPlayingWidgetIdentifier.kind)
 
         // Fire-and-forget artwork cache refresh on track change.
         // Artwork URL is the only field whose payload doesn't fit in
@@ -107,12 +107,8 @@ final class NowPlayingSnapshotWriter {
         NowPlayingSnapshotStore.clear()
         lastWritten = nil
         lastWriteAt = .distantPast
-        WidgetCenter.shared.reloadTimelines(ofKind: NowPlayingSnapshotWriter.widgetKind)
+        WidgetCenter.shared.reloadTimelines(ofKind: NowPlayingWidgetIdentifier.kind)
     }
-
-    // Single source of truth for the widget kind string. The widget
-    // declares this same constant — keep them in sync via this file.
-    static let widgetKind = "dev.riff.nowPlayingWidget"
 
     // MARK: - Artwork cache
 
