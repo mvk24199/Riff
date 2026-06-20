@@ -559,16 +559,6 @@ struct RiffAppShortcuts: AppShortcutsProvider {
             systemImageName: "music.note.list"
         )
         AppShortcut(
-            intent: SetPlaybackRateIntent(),
-            phrases: [
-                "Set playback speed on \(.applicationName)",
-                "Change playback speed in \(.applicationName)",
-                "Set speed on \(.applicationName)"
-            ],
-            shortTitle: "Playback Speed",
-            systemImageName: "speedometer"
-        )
-        AppShortcut(
             intent: ToggleLikeIntent(),
             phrases: [
                 "Like this song on \(.applicationName)",
@@ -577,16 +567,6 @@ struct RiffAppShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Like Track",
             systemImageName: "hand.thumbsup.fill"
-        )
-        AppShortcut(
-            intent: SkipBack15Intent(),
-            phrases: [
-                "Skip back 15 seconds on \(.applicationName)",
-                "Rewind 15 seconds on \(.applicationName)",
-                "Go back 15 on \(.applicationName)"
-            ],
-            shortTitle: "Back 15s",
-            systemImageName: "gobackward.15"
         )
         AppShortcut(
             intent: SkipForward30Intent(),
@@ -598,16 +578,13 @@ struct RiffAppShortcuts: AppShortcutsProvider {
             shortTitle: "Forward 30s",
             systemImageName: "goforward.30"
         )
-        AppShortcut(
-            intent: SetVolumeIntent(),
-            phrases: [
-                "Set volume on \(.applicationName)",
-                "Change volume in \(.applicationName)",
-                "Set \(.applicationName) volume"
-            ],
-            shortTitle: "Set Volume",
-            systemImageName: "speaker.wave.2.fill"
-        )
+        // SetPlaybackRateIntent (Double param), SetVolumeIntent (Int
+        // param), and SkipBack15Intent are intentionally NOT registered
+        // here. Apple caps AppShortcutsProvider.appShortcuts at 10
+        // entries per app (we ship 13 intents, including these three).
+        // The intents themselves still ship — users can find them in
+        // the Shortcuts.app editor — they just lose the voice-trigger
+        // phrase. Numeric-param shortcuts voice-prompt poorly anyway.
         AppShortcut(
             intent: OpenStationForIntent(),
             phrases: [
